@@ -12,6 +12,7 @@ const path = require('path');
 const fs = require('fs');
 const helmet = require('helmet');
 const seedRoles = require('./utils/seedRoles');
+const trainingRoutes = require('./routes/trainingRoutes');
 
 // Middleware
 app.use(cors());
@@ -44,6 +45,8 @@ app.get('/', (req, res) => {
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1', userRoutes);
 app.use('/api/v1/blogs', blogRoutes);
+app.use('/api/v1/trainings', trainingRoutes);
+
 
 
 // Error handling middleware (should be last)

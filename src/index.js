@@ -12,7 +12,9 @@ const path = require('path');
 const fs = require('fs');
 const helmet = require('helmet');
 const seedRoles = require('./utils/seedRoles');
+const seedTestimonials = require('./utils/testimonialSeeder');
 const trainingRoutes = require('./routes/trainingRoutes');
+const testimonialRoutes = require('./routes/testimonialRoutes');
 
 // Middleware
 app.use(cors());
@@ -46,6 +48,7 @@ app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1', userRoutes);
 app.use('/api/v1/blogs', blogRoutes);
 app.use('/api/v1/trainings', trainingRoutes);
+app.use('/api/v1/testimonials', testimonialRoutes);
 
 
 
@@ -67,6 +70,7 @@ const startServer = async () => {
     try {
         await connectDB();
         await seedRoles();
+        await seedTestimonials();
         app.listen(port, () => {
             console.log(`✅ Server running on Port: ${port}`);
             console.log(`📁 Uploads directory: ${uploadDir}`);

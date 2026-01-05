@@ -1,49 +1,60 @@
 const Blog = require('../models/blogModel');
 const HTTP_STATUS_CODES = require('../utils/statusCodes');
 
-// Create a new blog
 const createBlog = async (req, res) => {
   try {
-    const { 
-      title, 
-      excerpt, 
-      content, 
-      category, 
-      author, 
-      image, 
-      readTime, 
-      featured,
-      tags,
-      metaTitle,
-      metaDescription 
-    } = req.body;
-
-    // Required fields validation
-    if (!title || !excerpt || !content || !category || !author) {
-      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
-        error: 'Title, excerpt, content, category, and author are required'
-      });
-    }
-
-    // Create blog
-    const blog = new Blog({
+    const {
       title,
       excerpt,
       content,
       category,
       author,
-      authorId: req.userId, // From authentication middleware
-      image: image || 'https://via.placeholder.com/800x400',
+      readTime,
+      featured,
+      tags,
+      metaTitle,
+      metaDescription,
+      imageUrl
+    } = req.body;
+
+    if (!title || !excerpt || !content || !category || !author) {
+      return res.status(400).json({
+        error: 'Title, excerpt, content, category, and author are required'
+      });
+    }
+
+    const blogData = {
+      title,
+      excerpt,
+      content,
+      category,
+      author,
+      authorId: req.userId,
       readTime: readTime || '5 min read',
-      featured: featured || false,
-      tags: tags || [],
+      featured: featured === 'true',
+      tags: tags ? JSON.parse(tags) : [],
       metaTitle: metaTitle || title,
       metaDescription: metaDescription || excerpt
-    });
+    };
 
+    if (req.file) {
+      blogData.image = {
+        data: req.file.buffer,
+        contentType: req.file.mimetype,
+        filename: req.file.originalname,
+        size: req.file.size
+      };
+      blogData.imageUrl = null; // Important
+    } else if (imageUrl) {
+      blogData.imageUrl = imageUrl;
+    } else {
+      blogData.imageUrl = 'https://cdn.dribbble.com/userupload/41784969/file/still-f9b1bc8254d3e952592927149caef80f.gif?resize=400x0';
+    }
+
+    const blog = new Blog(blogData);
     await blog.save();
 
-    return res.status(HTTP_STATUS_CODES.CREATED).json({
+    return res.status(201).json({
       message: 'Blog created successfully',
       blog: {
         id: blog._id,
@@ -52,14 +63,150 @@ const createBlog = async (req, res) => {
         excerpt: blog.excerpt,
         category: blog.category,
         author: blog.author,
-        image: blog.image,
+        date: blog.formattedDate,
         readTime: blog.readTime,
-        featured: blog.featured,
-        createdAt: blog.formattedDate
+        image: blog.imageUrlFormatted,
+        imageInfo: blog.getImageInfo()
       }
     });
   } catch (error) {
     console.error('Error creating blog:', error);
+    return res.status(500).json({ error: 'Failed to create blog' });
+  }
+};
+
+// Get blog image (serve image buffer)
+const getBlogImage = async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const blog = await Blog.findById(id).select('image.data image.contentType');
+    
+    if (!blog || !blog.image || !blog.image.data) {
+      // Return placeholder if no image
+      return res.redirect('https://cdn.dribbble.com/userupload/41784969/file/still-f9b1bc8254d3e952592927149caef80f.gif?resize=400x0');
+    }
+    
+    // Set content type and send image buffer
+    res.set('Content-Type', blog.image.contentType);
+    res.set('Cache-Control', 'public, max-age=31536000'); // Cache for 1 year
+    res.send(blog.image.data);
+  } catch (error) {
+    console.error('Error fetching blog image:', error);
+    // Redirect to placeholder on error
+    res.redirect('https://cdn.dribbble.com/userupload/41784969/file/still-f9b1bc8254d3e952592927149caef80f.gif?resize=400x0');
+  }
+};
+
+// Get blog image with details
+const getBlogImageWithInfo = async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const blog = await Blog.findById(id).select('image.data image.contentType image.filename image.size');
+    
+    if (!blog || !blog.image || !blog.image.data) {
+      return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
+        error: 'Image not found'
+      });
+    }
+    
+    // Send image info and base64 encoded image
+    const imageBase64 = blog.image.data.toString('base64');
+    
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      image: {
+        contentType: blog.image.contentType,
+        filename: blog.image.filename,
+        size: blog.image.size,
+        base64: `data:${blog.image.contentType};base64,${imageBase64}`,
+        url: `/api/v1/blogs/${id}/image`
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching blog image info:', error);
+    return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).json({
+      error: 'An error occurred while fetching the image'
+    });
+  }
+};
+
+// Update blog with image
+const updateBlog = async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Find existing blog
+    const existingBlog = await Blog.findById(id);
+    
+    if (!existingBlog) {
+      return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
+        error: 'Blog not found'
+      });
+    }
+
+    // Prepare updates
+    const updates = { ...req.body };
+    
+    // Handle new file upload
+    if (req.file) {
+      // File validation is already done by multer, but double-check
+      if (req.file.size > 16 * 1024 * 1024) {
+        return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+          error: 'Image size exceeds 16MB limit'
+        });
+      }
+      
+      updates.image = {
+        data: req.file.buffer,
+        contentType: req.file.mimetype,
+        filename: req.file.originalname,
+        size: req.file.size
+      };
+      // Clear imageUrl if uploading new image
+      updates.imageUrl = null;
+    }
+    
+    // If imageUrl is provided and no file uploaded, clear stored image
+    if (req.body.imageUrl && !req.file) {
+      updates.image = {
+        data: null,
+        contentType: null,
+        filename: null,
+        size: 0
+      };
+    }
+
+    // Find and update blog
+    const blog = await Blog.findByIdAndUpdate(
+      id,
+      { $set: updates },
+      { new: true, runValidators: true }
+    );
+
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      message: 'Blog updated successfully',
+      blog: {
+        id: blog._id,
+        title: blog.title,
+        slug: blog.slug,
+        excerpt: blog.excerpt,
+        category: blog.category,
+        author: blog.author,
+        date: blog.formattedDate,
+        readTime: blog.readTime,
+        image: blog.imageUrlFormatted,
+        imageInfo: blog.getImageInfo(),
+        featured: blog.featured
+      }
+    });
+  } catch (error) {
+    console.error('Error updating blog:', error);
+    
+    if (error.name === 'ValidationError') {
+      const errors = Object.values(error.errors).map(err => err.message);
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ error: errors.join(', ') });
+    }
     
     if (error.code === 11000) {
       return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
@@ -67,18 +214,37 @@ const createBlog = async (req, res) => {
       });
     }
     
-    if (error.name === 'ValidationError') {
-      const errors = Object.values(error.errors).map(err => err.message);
-      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ error: errors.join(', ') });
-    }
-    
     return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).json({
-      error: 'An error occurred while creating the blog'
+      error: 'An error occurred while updating the blog'
     });
   }
 };
 
-// Get all blogs
+// Delete blog with image cleanup
+const deleteBlog = async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const blog = await Blog.findByIdAndDelete(id);
+    
+    if (!blog) {
+      return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
+        error: 'Blog not found'
+      });
+    }
+    
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      message: 'Blog deleted successfully'
+    });
+  } catch (error) {
+    console.error('Error deleting blog:', error);
+    return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).json({
+      error: 'An error occurred while deleting the blog'
+    });
+  }
+};
+
+// Update getAllBlogs to include image info
 const getAllBlogs = async (req, res) => {
   try {
     const { 
@@ -92,27 +258,15 @@ const getAllBlogs = async (req, res) => {
     
     const query = { published: true };
     
-    // Filter by category
-    if (category) {
-      query.category = category;
-    }
+    if (category) query.category = category;
+    if (featured !== undefined) query.featured = featured === 'true';
+    if (search) query.$text = { $search: search };
     
-    // Filter by featured
-    if (featured !== undefined) {
-      query.featured = featured === 'true';
-    }
-    
-    // Search functionality
-    if (search) {
-      query.$text = { $search: search };
-    }
-    
-    // Pagination
     const skip = (parseInt(page) - 1) * parseInt(limit);
     
     const [blogs, total] = await Promise.all([
       Blog.find(query)
-        .select('-content -__v')
+        .select('-content -__v') // REMOVED -image.data from here
         .sort(sort)
         .skip(skip)
         .limit(parseInt(limit)),
@@ -128,7 +282,8 @@ const getAllBlogs = async (req, res) => {
       author: blog.author,
       date: blog.formattedDate,
       readTime: blog.readTime,
-      image: blog.image,
+      image: blog.imageUrlFormatted,
+      imageInfo: blog.getImageInfo(),
       featured: blog.featured,
       views: blog.views,
       likes: blog.likes,
@@ -170,6 +325,13 @@ const getBlogBySlug = async (req, res) => {
       });
     }
     
+    // Convert blog to object and remove image buffer
+    const blogObject = blog.toObject();
+    if (blogObject.image && blogObject.image.data) {
+      blogObject.image.hasBuffer = true;
+      delete blogObject.image.data;
+    }
+    
     return res.status(HTTP_STATUS_CODES.OK).json({
       blog: {
         id: blog._id,
@@ -183,7 +345,8 @@ const getBlogBySlug = async (req, res) => {
         authorDetails: blog.authorId,
         date: blog.formattedDate,
         readTime: blog.readTime,
-        image: blog.image,
+        image: blog.imageUrlFormatted,
+        imageInfo: blog.getImageInfo(),
         featured: blog.featured,
         views: blog.views,
         likes: blog.likes,
@@ -226,7 +389,8 @@ const getBlogById = async (req, res) => {
         author: blog.author,
         date: blog.formattedDate,
         readTime: blog.readTime,
-        image: blog.image,
+        image: blog.imageUrlFormatted,
+        imageInfo: blog.getImageInfo(),
         featured: blog.featured,
         views: blog.views,
         likes: blog.likes
@@ -236,84 +400,6 @@ const getBlogById = async (req, res) => {
     console.error('Error fetching blog:', error);
     return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).json({
       error: 'An error occurred while fetching the blog'
-    });
-  }
-};
-
-// Update blog
-const updateBlog = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const updates = req.body;
-    
-    // Find and update blog
-    const blog = await Blog.findByIdAndUpdate(
-      id,
-      { $set: updates },
-      { new: true, runValidators: true }
-    );
-    
-    if (!blog) {
-      return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
-        error: 'Blog not found'
-      });
-    }
-    
-    return res.status(HTTP_STATUS_CODES.OK).json({
-      message: 'Blog updated successfully',
-      blog: {
-        id: blog._id,
-        title: blog.title,
-        slug: blog.slug,
-        excerpt: blog.excerpt,
-        category: blog.category,
-        author: blog.author,
-        date: blog.formattedDate,
-        readTime: blog.readTime,
-        image: blog.image,
-        featured: blog.featured
-      }
-    });
-  } catch (error) {
-    console.error('Error updating blog:', error);
-    
-    if (error.name === 'ValidationError') {
-      const errors = Object.values(error.errors).map(err => err.message);
-      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ error: errors.join(', ') });
-    }
-    
-    if (error.code === 11000) {
-      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
-        error: 'A blog with similar title already exists'
-      });
-    }
-    
-    return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).json({
-      error: 'An error occurred while updating the blog'
-    });
-  }
-};
-
-// Delete blog
-const deleteBlog = async (req, res) => {
-  try {
-    const { id } = req.params;
-    
-    const blog = await Blog.findByIdAndDelete(id);
-    
-    if (!blog) {
-      return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
-        error: 'Blog not found'
-      });
-    }
-    
-    return res.status(HTTP_STATUS_CODES.OK).json({
-      message: 'Blog deleted successfully'
-    });
-  } catch (error) {
-    console.error('Error deleting blog:', error);
-    return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).json({
-      error: 'An error occurred while deleting the blog'
     });
   }
 };
@@ -338,7 +424,8 @@ const getFeaturedBlogs = async (req, res) => {
       author: blog.author,
       date: blog.formattedDate,
       readTime: blog.readTime,
-      image: blog.image,
+      image: blog.imageUrlFormatted,
+      imageInfo: blog.getImageInfo(),
       featured: blog.featured
     }));
     
@@ -405,6 +492,60 @@ const likeBlog = async (req, res) => {
   }
 };
 
+// Get blog statistics
+const getBlogStats = async (req, res) => {
+  try {
+    const stats = await Blog.aggregate([
+      {
+        $group: {
+          _id: null,
+          totalBlogs: { $sum: 1 },
+          blogsWithImages: {
+            $sum: {
+              $cond: [
+                { $and: [
+                  { $gt: ['$image.size', 0] },
+                  { $ne: ['$image.data', null] }
+                ]}, 
+                1, 
+                0
+              ]
+            }
+          },
+          totalImageSize: {
+            $sum: {
+              $cond: ['$image.size', '$image.size', 0]
+            }
+          },
+          avgImageSize: {
+            $avg: {
+              $cond: [{ $gt: ['$image.size', 0] }, '$image.size', null]
+            }
+          },
+          maxImageSize: {
+            $max: '$image.size'
+          }
+        }
+      }
+    ]);
+    
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      stats: stats[0] || {
+        totalBlogs: 0,
+        blogsWithImages: 0,
+        totalImageSize: 0,
+        avgImageSize: 0,
+        maxImageSize: 0
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching blog stats:', error);
+    return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).json({
+      error: 'An error occurred while fetching statistics'
+    });
+  }
+};
+
 module.exports = {
   createBlog,
   getAllBlogs,
@@ -414,5 +555,8 @@ module.exports = {
   deleteBlog,
   getFeaturedBlogs,
   getBlogCategories,
-  likeBlog
+  likeBlog,
+  getBlogImage,
+  getBlogImageWithInfo,
+  getBlogStats
 };

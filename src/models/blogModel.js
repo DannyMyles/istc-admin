@@ -42,8 +42,14 @@ const blogSchema = new mongoose.Schema({
     ref: 'User'
   },
   image: {
+    data: Buffer,
+    contentType: String,
+    filename: String,
+    size: Number
+  },
+  imageUrl: {
     type: String,
-    default: 'https://via.placeholder.com/800x400'
+    default: 'https://cdn.dribbble.com/userupload/41784969/file/still-f9b1bc8254d3e952592927149caef80f.gif?resize=400x0'
   },
   readTime: {
     type: String,
@@ -75,7 +81,9 @@ const blogSchema = new mongoose.Schema({
     maxlength: [160, 'Meta description cannot be more than 160 characters']
   }
 }, {
-  timestamps: true
+  timestamps: true,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true }
 });
 
 // Generate slug from title before saving
@@ -104,6 +112,56 @@ blogSchema.virtual('formattedDate').get(function() {
     day: 'numeric'
   });
 });
+
+blogSchema.virtual('hasUploadedImage').get(function() {
+  return !!(this.image && this.image.size && this.image.size > 0);
+});
+
+// Virtual for image URL - returns either external URL or internal image path
+blogSchema.virtual('imageUrlFormatted').get(function() {
+  // First check for uploaded image
+  if (this.hasUploadedImage) {
+    return `/api/v1/blogs/${this._id}/image`;
+  }
+  
+  // Then check for external URL
+  if (this.imageUrl && this.imageUrl !== 'https://cdn.dribbble.com/userupload/41784969/file/still-f9b1bc8254d3e952592927149caef80f.gif?resize=400x0') {
+    return this.imageUrl;
+  }
+  
+  // Return default placeholder
+  return 'https://cdn.dribbble.com/userupload/41784969/file/still-f9b1bc8254d3e952592927149caef80f.gif?resize=400x0';
+});
+
+// Method to get image info
+blogSchema.methods.getImageInfo = function() {
+  // Check if we have an uploaded image
+  if (this.hasUploadedImage) {
+    return {
+      hasImage: true,
+      contentType: this.image.contentType,
+      filename: this.image.filename,
+      size: this.image.size,
+      url: `/api/v1/blogs/${this._id}/image`,
+      type: 'uploaded'
+    };
+  }
+  
+  // Check if we have an external image URL
+  if (this.imageUrl && this.imageUrl !== 'https://cdn.dribbble.com/userupload/41784969/file/still-f9b1bc8254d3e952592927149caef80f.gif?resize=400x0') {
+    return {
+      hasImage: true,
+      type: 'external',
+      url: this.imageUrl
+    };
+  }
+  
+  // Return default placeholder
+  return {
+    hasImage: false,
+    url: 'https://cdn.dribbble.com/userupload/41784969/file/still-f9b1bc8254d3e952592927149caef80f.gif?resize=400x0'
+  };
+};
 
 const Blog = mongoose.model('Blog', blogSchema);
 

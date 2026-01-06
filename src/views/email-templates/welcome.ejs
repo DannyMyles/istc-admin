@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Welcome to ISTC</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            margin: 0;
+            padding: 0;
+        }
+
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            background: #10b981;
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .content {
+            padding: 30px;
+            background: #f9f9f9;
+        }
+
+        .button {
+            display: inline-block;
+            padding: 12px 30px;
+            background: #10b981;
+            color: white;
+            text-decoration: none;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+
+        .footer {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+            font-size: 12px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Welcome to <%= process.env.APP_NAME || 'Our App' %>!</h1>
+        </div>
+        <div class="content">
+            <h2>Hello <%= name %>,</h2>
+            <p>Thank you for registering with us. Your account has been successfully created.</p>
+
+            <div style="text-align: center; margin: 30px 0;">
+                <a href="<%= process.env.FRONTEND_URL %>/login" class="button">
+                    Login to Your Account
+                </a>
+            </div>
+
+            <p><strong>Getting Started:</strong></p>
+            <ul>
+                <li>Complete your profile</li>
+                <li>Explore the dashboard</li>
+                <li>Update your preferences</li>
+            </ul>
+
+            <p>If you have any questions, please contact our support team.</p>
+
+            <p>Best regards,<br>The <%= process.env.APP_NAME || 'Our App' %> Team</p>
+        </div>
+        <div class="footer">
+            <p>© <%= new Date().getFullYear() %>
+                    <%= process.env.APP_NAME || 'Our App' %>. All rights reserved.</p>
+        </div>
+    </div>
+</body>
+
+</html>

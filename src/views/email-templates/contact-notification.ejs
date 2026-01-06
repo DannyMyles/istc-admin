@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>New Contact Form Submission</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            margin: 0;
+            padding: 0;
+        }
+
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            background: #3b82f6;
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .content {
+            padding: 20px;
+            background: #f9f9f9;
+        }
+
+        .info-box {
+            background: white;
+            padding: 15px;
+            margin: 10px 0;
+            border-left: 4px solid #3b82f6;
+        }
+
+        .footer {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+            font-size: 12px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>New Contact Form Submission</h1>
+        </div>
+        <div class="content">
+            <h2>Contact Details:</h2>
+
+            <div class="info-box">
+                <strong>Name:</strong>
+                <%= name %><br>
+                    <strong>Email:</strong>
+                    <%= email %><br>
+                        <% if (phone) { %>
+                            <strong>Phone:</strong>
+                            <%= phone %><br>
+                                <% } %>
+                                    <strong>Submitted:</strong>
+                                    <%= new Date(createdAt).toLocaleString() %>
+            </div>
+
+            <div class="info-box">
+                <strong>Subject:</strong>
+                <%= subject %><br>
+                    <strong>Message:</strong><br>
+                    <p>
+                        <%= message %>
+                    </p>
+            </div>
+
+            <p>Please respond to this inquiry within 24 hours.</p>
+
+            <p>
+                <a href="mailto:<%= email %>?subject=Re: <%= subject %>"
+                    style="background: #3b82f6; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">
+                    Reply to <%= name %>
+                </a>
+            </p>
+        </div>
+        <div class="footer">
+            <p>This is an automated notification from <%= process.env.APP_NAME || 'ISTC' %>
+            </p>
+        </div>
+    </div>
+</body>
+
+</html>

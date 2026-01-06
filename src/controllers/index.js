@@ -22,5 +22,10 @@ module.exports = {
     loginUser: authController.loginUser,
     logoutUser: authController.logoutUser,
     getCurrentUser: authController.getCurrentUser,
-    updateProfile: authController.updateProfile
+    updateProfile: authController.updateProfile,
+    forgotPassword: authController.forgotPassword,
+    resetPassword: authController.resetPassword,
+    verifyResetToken: authController.verifyResetToken,
+    changePassword: authController.changePassword,
+    submitContactForm: authController.submitContactForm
 };

@@ -27,12 +27,10 @@ const allowedOrigins =
         "https://istc-xy6v.vercel.app",
         "https://istc-admin.onrender.com",
         "http://localhost:3000",
-        "http://localhost:3001",
         "http://127.0.0.1:3000",
-        "https://istc-o0wxq1al9-dannymyles-projects.vercel.app",
         "https://istc-vercel-app.vercel.app",
-        "https://istc-git-main-dannymyles-projects.vercel.app",
-        "https://istc-git-main-dannymyles-projects.vercel.app"
+        "https://istc-kz3s-git-main-dannymyles-projects.vercel.app",
+        "https://istc-kz3s-lco8ulybm-dannymyles-projects.vercel.app"
       ].filter(Boolean)
     : [
         "http://localhost:3000",

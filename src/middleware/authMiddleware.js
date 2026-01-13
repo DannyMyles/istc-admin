@@ -1,50 +1,78 @@
-require('dotenv').config(); 
 const jwt = require("jsonwebtoken");
 const HTTP_STATUS_CODES = require('../utils/statusCodes');
 
-const authenticateUser = (req, res, next) => {
-    const authHeader = req.header("Authorization");
-    
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-        return res.status(401).json({ error: "Access denied, token not provided" });
-    }
-
-    const token = authHeader.split(' ')[1];
-
-    if (!token) {
-        return res.status(401).json({ error: "Access denied, token not provided" });
-    }
-
-    try {
-        const verified = jwt.verify(token, process.env.JWT_SECRET_KEY);
-        req.userId = verified.userId;
-        req.userRole = verified.role;
-        next();
-    } catch (err) {
-        console.error('Token verification error:', err);
-        return res.status(400).json({ error: "Invalid token" });
-    }
-};
-
-const authenticate = async (req, res, next) => {
+const authenticate = (req, res, next) => {
   try {
-    const token = req.headers.authorization?.split(' ')[1];
+    // Check for Authorization header
+    const authHeader = req.headers.authorization;
     
-    if (!token) {
+    if (!authHeader) {
       return res.status(HTTP_STATUS_CODES.UNAUTHORIZED).json({
         error: 'Access denied. No token provided.'
       });
     }
     
+    // Check if it's in Bearer format
+    const parts = authHeader.split(' ');
+    if (parts.length !== 2 || parts[0] !== 'Bearer') {
+      return res.status(HTTP_STATUS_CODES.UNAUTHORIZED).json({
+        error: 'Token format should be: Bearer [token]'
+      });
+    }
+    
+    const token = parts[1];
+    
+    // Check if token is empty
+    if (!token || token === 'null' || token === 'undefined') {
+      return res.status(HTTP_STATUS_CODES.UNAUTHORIZED).json({
+        error: 'Invalid token format'
+      });
+    }
+    
+    // Verify the token
     const decoded = jwt.verify(token, process.env.JWT_SECRET_KEY);
+    
+    // Attach user info to request
     req.userId = decoded.userId;
-    req.userRole = decoded.role;
+    
+    // Extract role name - prefer 'role' (string) over 'roleId' (ObjectId)
+    // The authorize middleware expects role names like 'admin', 'user', etc.
+    if (decoded.role) {
+      req.userRole = decoded.role;
+    } else if (decoded.roleId) {
+      // roleId is an ObjectId, we'll need to handle this in routes that need it
+      req.userRoleId = decoded.roleId;
+      req.userRole = null; // Will need to be populated from DB if needed
+    }
+    
+    req.userEmail = decoded.email;
+    
     next();
   } catch (error) {
-    console.error('Authentication error:', error);
-    return res.status(HTTP_STATUS_CODES.UNAUTHORIZED).json({
-      error: 'Invalid or expired token'
-    });
+    console.error('Authentication error:', error.name, error.message);
+    
+    // Handle specific JWT errors
+    switch (error.name) {
+      case 'JsonWebTokenError':
+        if (error.message === 'jwt malformed') {
+          return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+            error: 'Invalid token format. Please login again.'
+          });
+        }
+        return res.status(HTTP_STATUS_CODES.UNAUTHORIZED).json({
+          error: 'Invalid token'
+        });
+        
+      case 'TokenExpiredError':
+        return res.status(HTTP_STATUS_CODES.UNAUTHORIZED).json({
+          error: 'Token expired. Please login again.'
+        });
+        
+      default:
+        return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).json({
+          error: 'Authentication failed'
+        });
+    }
   }
 };
 
@@ -56,9 +84,10 @@ const authorize = (roles = []) => {
       });
     }
     
-    if (roles.length && !roles.includes(req.userRole)) {
+    // If roles array is empty, allow all authenticated users
+    if (roles.length > 0 && !roles.includes(req.userRole)) {
       return res.status(HTTP_STATUS_CODES.FORBIDDEN).json({
-        error: 'You do not have permission to perform this action'
+        error: `Access denied. Required role: ${roles.join(', ')}`
       });
     }
     
@@ -66,4 +95,7 @@ const authorize = (roles = []) => {
   };
 };
 
-module.exports = { authenticateUser, authenticate, authorize };
+// Keep backward compatibility
+const authenticateUser = authenticate;
+
+module.exports = { authenticate, authorize, authenticateUser };

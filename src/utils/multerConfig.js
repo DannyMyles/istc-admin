@@ -21,12 +21,12 @@ const fileFilter = (req, file, cb) => {
   }
 };
 
-// Configure multer for MongoDB storage (Buffer) - Updated to 16MB
+// Configure multer for MongoDB storage (Buffer) - Updated to 50MB for large blog images
 const upload = multer({
   storage: storage,
   fileFilter: fileFilter,
   limits: {
-    fileSize: 16 * 1024 * 1024 // Increased to 16MB for MongoDB
+    fileSize: 50 * 1024 * 1024 // 50MB for large blog content images
   }
 });
 

@@ -69,8 +69,8 @@ const corsOptions = {
 ======================= */
 
 app.use(cors(corsOptions)); // ✅ handles OPTIONS automatically
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '100mb' })); // Increased to 100mb for large blog payloads
+app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 app.use(morgan("dev"));
 app.use(helmet());
 

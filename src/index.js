@@ -25,8 +25,9 @@ const allowedOrigins =
     ? [
         process.env.FRONTEND_URL,
         "https://istc-9k3cniwgf-dannymyles-projects.vercel.app",
-        "https://istc-ten.vercel.app/",
-        "https://istc-9k3cniwgf-dannymyles-projects.vercel.app/"
+        "https://istc-ten.vercel.app",
+        "https://istc-9k3cniwgf-dannymyles-projects.vercel.app",
+        "https://istc-git-main-dannymyles-projects.vercel.app",
       ].filter(Boolean)
     : [
         "http://localhost:3000",

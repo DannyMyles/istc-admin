@@ -24,13 +24,9 @@ const allowedOrigins =
   process.env.NODE_ENV === "production"
     ? [
         process.env.FRONTEND_URL,
-        "https://istc-xy6v.vercel.app",
-        "https://istc-admin.onrender.com",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "https://istc-vercel-app.vercel.app",
-        "https://istc-kz3s-git-main-dannymyles-projects.vercel.app",
-        "https://istc-kz3s-lco8ulybm-dannymyles-projects.vercel.app"
+        "https://istc-9k3cniwgf-dannymyles-projects.vercel.app",
+        "https://istc-ten.vercel.app/",
+        "https://istc-9k3cniwgf-dannymyles-projects.vercel.app/"
       ].filter(Boolean)
     : [
         "http://localhost:3000",

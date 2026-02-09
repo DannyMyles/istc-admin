@@ -1,4 +1,4 @@
-const Testimonial = require('../models/testimonialModel');
+const { Testimonial } = require('../models');
 
 const seedTestimonials = async () => {
     try {
@@ -108,7 +108,7 @@ const seedTestimonials = async () => {
         let skippedCount = 0;
 
         // Check if any testimonials already exist
-        const existingCount = await Testimonial.countDocuments();
+        const existingCount = await Testimonial.count();
         if (existingCount > 0) {
             console.log('⏭️  Testimonials already exist, skipping seeding');
             return { createdCount: 0, skippedCount: defaultTestimonials.length };
@@ -118,14 +118,12 @@ const seedTestimonials = async () => {
 
         for (const testimonialData of defaultTestimonials) {
             try {
-                // Create testimonial directly without checking for duplicates
-                const testimonial = new Testimonial(testimonialData);
-                await testimonial.save();
+                await Testimonial.create(testimonialData);
                 createdCount++;
                 console.log(`✅ Created testimonial: ${testimonialData.name}`);
             } catch (error) {
-                // If error is duplicate key, skip it
-                if (error.code === 11000) {
+                // If error is duplicate, skip it
+                if (error.name === 'SequelizeUniqueConstraintError') {
                     skippedCount++;
                     console.log(`⏭️  Skipped duplicate testimonial: ${testimonialData.name}`);
                 } else {
@@ -144,3 +142,5 @@ const seedTestimonials = async () => {
 };
 
 module.exports = seedTestimonials;
+
+

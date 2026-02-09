@@ -1,79 +1,95 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const { sequelize } = require('../db/connect');
 
-const contactSchema = new mongoose.Schema({
-  name: {
-    type: String,
-    required: [true, 'Name is required'],
-    trim: true,
-    maxlength: [100, 'Name cannot exceed 100 characters']
-  },
-  email: {
-    type: String,
-    required: [true, 'Email is required'],
-    lowercase: true,
-    trim: true,
-    match: [
-      /^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/,
-      'Please provide a valid email'
-    ]
-  },
-  subject: {
-    type: String,
-    required: [true, 'Subject is required'],
-    trim: true,
-    maxlength: [200, 'Subject cannot exceed 200 characters']
-  },
-  message: {
-    type: String,
-    required: [true, 'Message is required'],
-    trim: true,
-    maxlength: [2000, 'Message cannot exceed 2000 characters']
-  },
-  phone: {
-    type: String,
-    trim: true
-  },
-  status: {
-    type: String,
-    enum: ['pending', 'read', 'replied', 'resolved', 'spam'],
-    default: 'pending'
-  },
-  category: {
-    type: String,
-    enum: ['general', 'support', 'feedback', 'complaint', 'partnership', 'other'],
-    default: 'general'
-  },
-  priority: {
-    type: String,
-    enum: ['low', 'medium', 'high', 'urgent'],
-    default: 'medium'
-  },
-  userId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    default: null
-  },
-  response: {
-    repliedBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User'
+const Contact = sequelize.define('Contact', {
+    id: {
+        type: DataTypes.INTEGER,
+        primaryKey: true,
+        autoIncrement: true
     },
-    message: String,
-    repliedAt: Date
-  },
-  isArchived: {
-    type: Boolean,
-    default: false
-  }
+    name: {
+        type: DataTypes.STRING(100),
+        allowNull: false,
+        validate: {
+            len: {
+                args: [1, 100],
+                msg: 'Name cannot exceed 100 characters'
+            }
+        }
+    },
+    email: {
+        type: DataTypes.STRING(255),
+        allowNull: false,
+        validate: {
+            isEmail: {
+                msg: 'Please provide a valid email'
+            }
+        }
+    },
+    subject: {
+        type: DataTypes.STRING(200),
+        allowNull: false,
+        validate: {
+            len: {
+                args: [1, 200],
+                msg: 'Subject cannot exceed 200 characters'
+            }
+        }
+    },
+    message: {
+        type: DataTypes.TEXT,
+        allowNull: false,
+        validate: {
+            len: {
+                args: [1, 2000],
+                msg: 'Message cannot exceed 2000 characters'
+            }
+        }
+    },
+    phone: {
+        type: DataTypes.STRING(50),
+        allowNull: true
+    },
+    status: {
+        type: DataTypes.ENUM('pending', 'read', 'replied', 'resolved', 'spam'),
+        defaultValue: 'pending'
+    },
+    category: {
+        type: DataTypes.ENUM('general', 'support', 'feedback', 'complaint', 'partnership', 'other'),
+        defaultValue: 'general'
+    },
+    priority: {
+        type: DataTypes.ENUM('low', 'medium', 'high', 'urgent'),
+        defaultValue: 'medium'
+    },
+    userId: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+        defaultValue: null
+    },
+    response: {
+        type: DataTypes.JSON,
+        allowNull: true,
+        defaultValue: null
+    },
+    isArchived: {
+        type: DataTypes.BOOLEAN,
+        defaultValue: false
+    }
 }, {
-  timestamps: true
+    tableName: 'contacts',
+    indexes: [
+        {
+            fields: ['status', 'created_at']
+        },
+        {
+            fields: ['email']
+        },
+        {
+            fields: ['user_id']
+        }
+    ]
 });
 
-// Indexes for better query performance
-contactSchema.index({ status: 1, createdAt: -1 });
-contactSchema.index({ email: 1 });
-contactSchema.index({ userId: 1 });
-
-const Contact = mongoose.model('Contact', contactSchema);
-
 module.exports = Contact;
+

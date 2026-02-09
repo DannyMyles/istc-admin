@@ -1,19 +1,6 @@
-// src/controllers/trainingController.js
-const Training = require('../models/trainingModel');
+const { Op, fn, col } = require('sequelize');
+const { Training, Testimonial } = require('../models');
 const HTTP_STATUS_CODES = require('../utils/statusCodes');
-
-// Helper function to check for existing training
-const checkExistingTraining = async (title, excludeId = null) => {
-  const query = {
-    title: { $regex: new RegExp(`^${title.trim()}$`, 'i') }
-  };
-  
-  if (excludeId) {
-    query._id = { $ne: excludeId };
-  }
-  
-  return await Training.findOne(query);
-};
 
 // Helper function to format session dates
 const formatSessionDates = (startDate, endDate) => {
@@ -41,22 +28,23 @@ const calculateDurationInDays = (startDate, endDate) => {
   return Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1;
 };
 
-// Helper function to format training response (FIXED VERSION)
+// Helper function to format training response
 const formatTrainingResponse = (training, detailed = false) => {
   // Manually format sessions to ensure they're included
-  const formattedSessions = training.sessions ? training.sessions.map(session => ({
-    ...session.toObject ? session.toObject() : session,
+  const sessionsArray = Array.isArray(training.sessions) ? training.sessions : [];
+  const formattedSessions = sessionsArray.map(session => ({
+    ...session,
     formattedDates: formatSessionDates(session.startDate, session.endDate),
     durationInDays: calculateDurationInDays(session.startDate, session.endDate)
-  })) : [];
+  }));
   
   // Count upcoming sessions
-  const upcomingSessions = training.sessions ? training.sessions.filter(s => 
+  const upcomingSessions = sessionsArray.filter(s => 
     s.status === 'scheduled' && new Date(s.startDate) > new Date()
-  ).length : 0;
+  ).length;
   
   const baseResponse = {
-    id: training._id,
+    id: training.id,
     code: training.code,
     title: training.title,
     description: training.description,
@@ -68,8 +56,8 @@ const formatTrainingResponse = (training, detailed = false) => {
     isFeatured: training.isFeatured,
     registrationFee: training.registrationFee,
     certification: training.certification,
-    sessions: formattedSessions,  // Use manually formatted sessions
-    upcomingSessions: upcomingSessions,  // Use manually calculated count
+    sessions: formattedSessions,
+    upcomingSessions: upcomingSessions,
     slug: training.slug,
     createdAt: training.createdAt
   };
@@ -80,7 +68,7 @@ const formatTrainingResponse = (training, detailed = false) => {
       prerequisites: training.prerequisites || [],
       learningOutcomes: training.learningOutcomes || [],
       requirements: training.requirements || [],
-      allSessions: training.sessions || [],
+      allSessions: sessionsArray,
       createdBy: training.createdBy,
       updatedBy: training.updatedBy,
       updatedAt: training.updatedAt,
@@ -119,13 +107,15 @@ const createTraining = async (req, res) => {
     }
 
     // Check if training with same title already exists
-    const existingTraining = await checkExistingTraining(title);
+    const existingTraining = await Training.findOne({
+      where: { title: { [Op.like]: title.trim() } }
+    });
     if (existingTraining) {
       return res.status(HTTP_STATUS_CODES.CONFLICT).json({
         error: 'A training course with this title already exists',
         suggestion: 'Please use a different title or update the existing course',
         existingTraining: {
-          id: existingTraining._id,
+          id: existingTraining.id,
           code: existingTraining.code,
           title: existingTraining.title
         }
@@ -158,7 +148,7 @@ const createTraining = async (req, res) => {
     }
 
     // Create training course
-    const training = new Training({
+    const training = await Training.create({
       title,
       description,
       targetGroup,
@@ -188,18 +178,15 @@ const createTraining = async (req, res) => {
       createdBy: req.userId
     });
 
-    await training.save();
-
     return res.status(HTTP_STATUS_CODES.CREATED).json({
       message: 'Training course created successfully',
       training: formatTrainingResponse(training)
     });
   } catch (error) {
     console.error('Error creating training course:', error);
-    
-    // Handle duplicate key errors
-    if (error.code === 11000) {
-      const field = Object.keys(error.keyPattern)[0];
+
+    if (error.name === 'SequelizeUniqueConstraintError') {
+      const field = Object.keys(error.fields || {})[0];
       
       if (field === 'title') {
         return res.status(HTTP_STATUS_CODES.CONFLICT).json({
@@ -211,35 +198,23 @@ const createTraining = async (req, res) => {
           error: 'A training course with similar title already exists',
           suggestion: 'Please modify the title slightly'
         });
-      } else if (field === 'code') {
-        // Retry with a different code
-        const training = new Training({
-          ...req.body,
-          code: undefined // Let the pre-save hook generate a new one
-        });
-        await training.save();
-        
-        return res.status(HTTP_STATUS_CODES.CREATED).json({
-          message: 'Training course created successfully (code regenerated)',
-          training: formatTrainingResponse(training)
-        });
       }
     }
-    
-    if (error.name === 'ValidationError') {
-      const errors = Object.values(error.errors).map(err => err.message);
+
+    if (error.name === 'SequelizeValidationError') {
+      const errors = error.errors.map(err => err.message);
       return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ 
         error: errors.join(', ') 
       });
     }
-    
+
     return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).json({
       error: 'An error occurred while creating the training course'
     });
   }
 };
 
-// Get all training courses (FIXED VERSION)
+// Get all training courses
 const getAllTrainings = async (req, res) => {
   try {
     const {
@@ -250,12 +225,11 @@ const getAllTrainings = async (req, res) => {
       isFeatured,
       isActive = true,
       search,
-      startDate,
-      endDate,
-      sort = '-createdAt'
+      sort = 'createdAt',
+      order = 'DESC'
     } = req.query;
     
-    const query = { isActive };
+    const query = { isActive: isActive === 'true' ? true : isActive === 'false' ? false : true };
     
     // Filter by category
     if (category) {
@@ -264,7 +238,7 @@ const getAllTrainings = async (req, res) => {
     
     // Filter by mode of study
     if (modeOfStudy) {
-      query.modeOfStudy = modeOfStudy;
+      query.modeOfStudy = { [Op.like]: `%${modeOfStudy}%` };
     }
     
     // Filter by featured status
@@ -274,36 +248,24 @@ const getAllTrainings = async (req, res) => {
     
     // Search functionality
     if (search) {
-      query.$or = [
-        { title: { $regex: search, $options: 'i' } },
-        { description: { $regex: search, $options: 'i' } },
-        { code: { $regex: search, $options: 'i' } },
-        { targetGroup: { $regex: search, $options: 'i' } }
+      query[Op.or] = [
+        { title: { [Op.like]: `%${search}%` } },
+        { description: { [Op.like]: `%${search}%` } },
+        { code: { [Op.like]: `%${search}%` } },
+        { targetGroup: { [Op.like]: `%${search}%` } }
       ];
     }
     
-    // Filter by date range
-    if (startDate || endDate) {
-      query['sessions.startDate'] = {};
-      if (startDate) {
-        query['sessions.startDate'].$gte = new Date(startDate);
-      }
-      if (endDate) {
-        query['sessions.startDate'].$lte = new Date(endDate);
-      }
-    }
-    
     // Pagination
-    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+    const orderArr = [[sort, order]];
     
-    const [trainings, total] = await Promise.all([
-      Training.find(query)
-        .populate('createdBy', 'name email')
-        .sort(sort)
-        .skip(skip)
-        .limit(parseInt(limit)),
-      Training.countDocuments(query)
-    ]);
+    const { count, rows: trainings } = await Training.findAndCountAll({
+      where: query,
+      order: orderArr,
+      limit: parseInt(limit),
+      offset
+    });
     
     // Format trainings using our helper function
     const formattedTrainings = trainings.map(training => 
@@ -314,9 +276,9 @@ const getAllTrainings = async (req, res) => {
       trainings: formattedTrainings,
       pagination: {
         currentPage: parseInt(page),
-        totalPages: Math.ceil(total / parseInt(limit)),
-        totalTrainings: total,
-        hasNextPage: skip + trainings.length < total,
+        totalPages: Math.ceil(count / parseInt(limit)),
+        totalTrainings: count,
+        hasNextPage: offset + trainings.length < count,
         hasPrevPage: page > 1
       }
     });
@@ -332,10 +294,9 @@ const getAllTrainings = async (req, res) => {
 const getTrainingById = async (req, res) => {
   try {
     const { id } = req.params;
+    const trainingId = parseInt(id);
     
-    const training = await Training.findById(id)
-      .populate('createdBy', 'name email')
-      .populate('updatedBy', 'name email');
+    const training = await Training.findByPk(trainingId);
     
     if (!training) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
@@ -358,8 +319,11 @@ const getTrainingById = async (req, res) => {
 const getTrainingSessions = async (req, res) => {
   try {
     const { id } = req.params;
+    const trainingId = parseInt(id);
     
-    const training = await Training.findById(id).select('sessions title code');
+    const training = await Training.findByPk(trainingId, {
+      attributes: ['id', 'title', 'code', 'sessions']
+    });
     
     if (!training) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
@@ -368,11 +332,11 @@ const getTrainingSessions = async (req, res) => {
     }
     
     return res.status(HTTP_STATUS_CODES.OK).json({
-      trainingId: training._id,
+      trainingId: training.id,
       title: training.title,
       code: training.code,
-      sessionsCount: training.sessions.length,
-      sessions: training.sessions
+      sessionsCount: training.sessions?.length || 0,
+      sessions: training.sessions || []
     });
   } catch (error) {
     console.error('Error fetching training sessions:', error);
@@ -387,8 +351,9 @@ const getTrainingBySlug = async (req, res) => {
   try {
     const { slug } = req.params;
     
-    const training = await Training.findOne({ slug, isActive: true })
-      .populate('createdBy', 'name email');
+    const training = await Training.findOne({ 
+      where: { slug, isActive: true } 
+    });
     
     if (!training) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
@@ -412,8 +377,9 @@ const getTrainingByCode = async (req, res) => {
   try {
     const { code } = req.params;
     
-    const training = await Training.findOne({ code, isActive: true })
-      .populate('createdBy', 'name email');
+    const training = await Training.findOne({ 
+      where: { code, isActive: true } 
+    });
     
     if (!training) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
@@ -436,10 +402,11 @@ const getTrainingByCode = async (req, res) => {
 const updateTraining = async (req, res) => {
   try {
     const { id } = req.params;
+    const trainingId = parseInt(id);
     const updates = req.body;
     
     // Check if training exists
-    const existingTraining = await Training.findById(id);
+    const existingTraining = await Training.findByPk(trainingId);
     if (!existingTraining) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
         error: 'Training course not found'
@@ -448,13 +415,18 @@ const updateTraining = async (req, res) => {
     
     // Check for duplicate title if title is being updated
     if (updates.title && updates.title !== existingTraining.title) {
-      const duplicateTraining = await checkExistingTraining(updates.title, id);
+      const duplicateTraining = await Training.findOne({
+        where: { 
+          title: { [Op.like]: updates.title },
+          id: { [Op.ne]: trainingId }
+        }
+      });
       if (duplicateTraining) {
         return res.status(HTTP_STATUS_CODES.CONFLICT).json({
           error: 'A training course with this title already exists',
           suggestion: 'Please use a different title',
           existingTraining: {
-            id: duplicateTraining._id,
+            id: duplicateTraining.id,
             code: duplicateTraining.code,
             title: duplicateTraining.title
           }
@@ -467,22 +439,13 @@ const updateTraining = async (req, res) => {
     delete updates.slug;
     delete updates.createdBy;
     
-    // Find and update training
-    const training = await Training.findByIdAndUpdate(
-      id,
-      { 
-        $set: { ...updates, updatedBy: req.userId }
-      },
-      { new: true, runValidators: true }
-    )
-    .populate('createdBy', 'name email')
-    .populate('updatedBy', 'name email');
+    // Update training
+    await Training.update(
+      { ...updates, updatedBy: req.userId },
+      { where: { id: trainingId }, individualHooks: true }
+    );
     
-    if (!training) {
-      return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
-        error: 'Training course not found'
-      });
-    }
+    const training = await Training.findByPk(trainingId);
     
     return res.status(HTTP_STATUS_CODES.OK).json({
       message: 'Training course updated successfully',
@@ -491,27 +454,18 @@ const updateTraining = async (req, res) => {
   } catch (error) {
     console.error('Error updating training course:', error);
     
-    if (error.name === 'ValidationError') {
-      const errors = Object.values(error.errors).map(err => err.message);
+    if (error.name === 'SequelizeValidationError') {
+      const errors = error.errors.map(err => err.message);
       return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ 
         error: errors.join(', ') 
       });
     }
     
-    if (error.code === 11000) {
-      const field = Object.keys(error.keyPattern)[0];
-      
-      if (field === 'title') {
-        return res.status(HTTP_STATUS_CODES.CONFLICT).json({
-          error: 'A training course with this title already exists',
-          suggestion: 'Please use a different title'
-        });
-      } else if (field === 'slug') {
-        return res.status(HTTP_STATUS_CODES.CONFLICT).json({
-          error: 'A training course with similar title already exists',
-          suggestion: 'Please modify the title slightly'
-        });
-      }
+    if (error.name === 'SequelizeUniqueConstraintError') {
+      return res.status(HTTP_STATUS_CODES.CONFLICT).json({
+        error: 'A training course with this title already exists',
+        suggestion: 'Please use a different title'
+      });
     }
     
     return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).json({
@@ -524,21 +478,19 @@ const updateTraining = async (req, res) => {
 const deleteTraining = async (req, res) => {
   try {
     const { id } = req.params;
+    const trainingId = parseInt(id);
     
-    const training = await Training.findByIdAndUpdate(
-      id,
-      { 
-        isActive: false,
-        updatedBy: req.userId
-      },
-      { new: true }
-    );
-    
+    const training = await Training.findByPk(trainingId);
     if (!training) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
         error: 'Training course not found'
       });
     }
+    
+    await Training.update(
+      { isActive: false, updatedBy: req.userId },
+      { where: { id: trainingId } }
+    );
     
     return res.status(HTTP_STATUS_CODES.OK).json({
       message: 'Training course deleted successfully'
@@ -551,14 +503,12 @@ const deleteTraining = async (req, res) => {
   }
 };
 
-// Add new session to training (IMPROVED VERSION)
+// Add new session to training
 const addTrainingSession = async (req, res) => {
   try {
     const { id } = req.params;
+    const trainingId = parseInt(id);
     const sessionData = req.body;
-    
-    console.log('Adding session to training ID:', id);
-    console.log('Session data received:', sessionData);
     
     // Validate required fields
     if (!sessionData.startDate || !sessionData.endDate) {
@@ -578,7 +528,7 @@ const addTrainingSession = async (req, res) => {
     }
     
     // Find training
-    const training = await Training.findById(id);
+    const training = await Training.findByPk(trainingId);
     
     if (!training) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
@@ -586,11 +536,11 @@ const addTrainingSession = async (req, res) => {
       });
     }
     
-    console.log(`Training found: ${training.title} (${training.code})`);
-    console.log(`Current sessions count: ${training.sessions.length}`);
+    // Get current sessions
+    const sessions = training.sessions || [];
     
-    // Check for overlapping sessions (optional)
-    const hasOverlap = training.sessions.some(session => {
+    // Check for overlapping sessions
+    const hasOverlap = sessions.some(session => {
       const sessionStart = new Date(session.startDate);
       const sessionEnd = new Date(session.endDate);
       return (startDate <= sessionEnd && endDate >= sessionStart);
@@ -617,32 +567,27 @@ const addTrainingSession = async (req, res) => {
       instructor: sessionData.instructor
     };
     
-    console.log('New session to add:', newSession);
-    
     // Add session to training
-    training.sessions.push(newSession);
-    training.updatedBy = req.userId;
+    sessions.push(newSession);
     
-    // Save training
-    await training.save();
-    console.log('Training saved successfully');
+    await Training.update(
+      { sessions, updatedBy: req.userId },
+      { where: { id: trainingId } }
+    );
     
-    // Fetch updated training to verify
-    const updatedTraining = await Training.findById(id);
-    console.log(`Updated sessions count: ${updatedTraining.sessions.length}`);
+    const updatedTraining = await Training.findByPk(trainingId);
     
-    // Return success response
     return res.status(HTTP_STATUS_CODES.CREATED).json({
       message: 'Session added successfully',
-      sessionId: updatedTraining.sessions[updatedTraining.sessions.length - 1]._id,
+      sessionId: updatedTraining.sessions[updatedTraining.sessions.length - 1].id,
       sessionsCount: updatedTraining.sessions.length,
       training: formatTrainingResponse(updatedTraining, true)
     });
   } catch (error) {
     console.error('Error adding session:', error);
     
-    if (error.name === 'ValidationError') {
-      const errors = Object.values(error.errors).map(err => err.message);
+    if (error.name === 'SequelizeValidationError') {
+      const errors = error.errors.map(err => err.message);
       return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ 
         error: errors.join(', ') 
       });
@@ -659,9 +604,11 @@ const addTrainingSession = async (req, res) => {
 const updateTrainingSession = async (req, res) => {
   try {
     const { id, sessionId } = req.params;
+    const trainingId = parseInt(id);
+    const sessionIdNum = parseInt(sessionId);
     const updates = req.body;
     
-    const training = await Training.findById(id);
+    const training = await Training.findByPk(trainingId);
     
     if (!training) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
@@ -669,9 +616,8 @@ const updateTrainingSession = async (req, res) => {
       });
     }
     
-    const sessionIndex = training.sessions.findIndex(
-      session => session._id.toString() === sessionId
-    );
+    const sessions = training.sessions || [];
+    const sessionIndex = sessions.findIndex(session => session.id === sessionIdNum);
     
     if (sessionIndex === -1) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
@@ -681,37 +627,41 @@ const updateTrainingSession = async (req, res) => {
     
     // Update session fields
     if (updates.startDate) {
-      training.sessions[sessionIndex].startDate = new Date(updates.startDate);
+      sessions[sessionIndex].startDate = new Date(updates.startDate);
     }
     
     if (updates.endDate) {
-      training.sessions[sessionIndex].endDate = new Date(updates.endDate);
+      sessions[sessionIndex].endDate = new Date(updates.endDate);
     }
     
     if (updates.status) {
-      training.sessions[sessionIndex].status = updates.status;
+      sessions[sessionIndex].status = updates.status;
     }
     
     if (updates.seats?.total !== undefined) {
-      training.sessions[sessionIndex].seats.total = updates.seats.total;
-      training.sessions[sessionIndex].seats.available = 
-        updates.seats.total - training.sessions[sessionIndex].seats.booked;
+      sessions[sessionIndex].seats.total = updates.seats.total;
+      sessions[sessionIndex].seats.available = 
+        updates.seats.total - sessions[sessionIndex].seats.booked;
     }
     
     if (updates.venue !== undefined) {
-      training.sessions[sessionIndex].venue = updates.venue;
+      sessions[sessionIndex].venue = updates.venue;
     }
     
     if (updates.instructor !== undefined) {
-      training.sessions[sessionIndex].instructor = updates.instructor;
+      sessions[sessionIndex].instructor = updates.instructor;
     }
     
-    training.updatedBy = req.userId;
-    await training.save();
+    await Training.update(
+      { sessions, updatedBy: req.userId },
+      { where: { id: trainingId } }
+    );
+    
+    const updatedTraining = await Training.findByPk(trainingId);
     
     return res.status(HTTP_STATUS_CODES.OK).json({
       message: 'Session updated successfully',
-      training: formatTrainingResponse(training, true)
+      training: formatTrainingResponse(updatedTraining, true)
     });
   } catch (error) {
     console.error('Error updating session:', error);
@@ -725,8 +675,10 @@ const updateTrainingSession = async (req, res) => {
 const deleteTrainingSession = async (req, res) => {
   try {
     const { id, sessionId } = req.params;
+    const trainingId = parseInt(id);
+    const sessionIdNum = parseInt(sessionId);
     
-    const training = await Training.findById(id);
+    const training = await Training.findByPk(trainingId);
     
     if (!training) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
@@ -734,9 +686,8 @@ const deleteTrainingSession = async (req, res) => {
       });
     }
     
-    const sessionIndex = training.sessions.findIndex(
-      session => session._id.toString() === sessionId
-    );
+    const sessions = training.sessions || [];
+    const sessionIndex = sessions.findIndex(session => session.id === sessionIdNum);
     
     if (sessionIndex === -1) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
@@ -745,11 +696,17 @@ const deleteTrainingSession = async (req, res) => {
     }
     
     // Store deleted session info for response
-    const deletedSession = training.sessions[sessionIndex];
+    const deletedSession = sessions[sessionIndex];
     
-    training.sessions.splice(sessionIndex, 1);
-    training.updatedBy = req.userId;
-    await training.save();
+    // Remove session
+    sessions.splice(sessionIndex, 1);
+    
+    await Training.update(
+      { sessions, updatedBy: req.userId },
+      { where: { id: trainingId } }
+    );
+    
+    const updatedTraining = await Training.findByPk(trainingId);
     
     return res.status(HTTP_STATUS_CODES.OK).json({
       message: 'Session deleted successfully',
@@ -758,7 +715,7 @@ const deleteTrainingSession = async (req, res) => {
         endDate: deletedSession.endDate,
         venue: deletedSession.venue
       },
-      training: formatTrainingResponse(training, true)
+      training: formatTrainingResponse(updatedTraining, true)
     });
   } catch (error) {
     console.error('Error deleting session:', error);
@@ -771,13 +728,14 @@ const deleteTrainingSession = async (req, res) => {
 // Get featured trainings
 const getFeaturedTrainings = async (req, res) => {
   try {
-    const trainings = await Training.find({ 
-      isFeatured: true, 
-      isActive: true 
-    })
-    .populate('createdBy', 'name email')
-    .sort('-createdAt')
-    .limit(8);
+    const trainings = await Training.findAll({
+      where: { 
+        isFeatured: true, 
+        isActive: true 
+      },
+      order: [['createdAt', 'DESC']],
+      limit: 8
+    });
     
     const formattedTrainings = trainings.map(training => 
       formatTrainingResponse(training, false)
@@ -801,15 +759,22 @@ const getUpcomingTrainings = async (req, res) => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     
-    const trainings = await Training.find({
-      isActive: true,
-      'sessions.startDate': { $gte: today }
-    })
-    .populate('createdBy', 'name email')
-    .sort('sessions.startDate')
-    .limit(parseInt(limit));
+    // This is a simplified approach - in production you might want a more complex query
+    const trainings = await Training.findAll({
+      where: { isActive: true },
+      order: [['createdAt', 'DESC']],
+      limit: parseInt(limit)
+    });
     
-    const formattedTrainings = trainings.map(training => 
+    // Filter for upcoming sessions in JavaScript
+    const upcomingTrainings = trainings.filter(training => {
+      const sessions = training.sessions || [];
+      return sessions.some(session => 
+        session.status === 'scheduled' && new Date(session.startDate) > today
+      );
+    });
+    
+    const formattedTrainings = upcomingTrainings.map(training => 
       formatTrainingResponse(training, false)
     );
     
@@ -827,17 +792,23 @@ const getUpcomingTrainings = async (req, res) => {
 // Get training categories
 const getTrainingCategories = async (req, res) => {
   try {
-    const categories = await Training.aggregate([
-      { $match: { isActive: true } },
-      { $group: { _id: '$category', count: { $sum: 1 } } },
-      { $sort: { count: -1 } }
-    ]);
+    const { sequelize } = require('../models');
+    
+    const categories = await Training.findAll({
+      where: { isActive: true },
+      attributes: [
+        'category',
+        [sequelize.fn('COUNT', sequelize.col('id')), 'count']
+      ],
+      group: ['category'],
+      order: [[sequelize.fn('COUNT', sequelize.col('id')), 'DESC']]
+    });
     
     return res.status(HTTP_STATUS_CODES.OK).json({
       categories: categories.map(cat => ({
-        name: cat._id,
-        count: cat.count,
-        slug: cat._id.toLowerCase().replace(/\s+/g, '-')
+        name: cat.category,
+        count: parseInt(cat.get('count')),
+        slug: cat.category.toLowerCase().replace(/\s+/g, '-')
       }))
     });
   } catch (error) {
@@ -859,27 +830,25 @@ const searchTrainings = async (req, res) => {
       });
     }
     
-    const query = {
-      isActive: true,
-      $or: [
-        { title: { $regex: q, $options: 'i' } },
-        { description: { $regex: q, $options: 'i' } },
-        { code: { $regex: q, $options: 'i' } },
-        { targetGroup: { $regex: q, $options: 'i' } },
-        { category: { $regex: q, $options: 'i' } }
-      ]
-    };
+    const searchPattern = `%${q}%`;
     
-    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const offset = (parseInt(page) - 1) * parseInt(limit);
     
-    const [trainings, total] = await Promise.all([
-      Training.find(query)
-        .populate('createdBy', 'name email')
-        .sort('-createdAt')
-        .skip(skip)
-        .limit(parseInt(limit)),
-      Training.countDocuments(query)
-    ]);
+    const { count, rows: trainings } = await Training.findAndCountAll({
+      where: {
+        isActive: true,
+        [Op.or]: [
+          { title: { [Op.like]: searchPattern } },
+          { description: { [Op.like]: searchPattern } },
+          { code: { [Op.like]: searchPattern } },
+          { targetGroup: { [Op.like]: searchPattern } },
+          { category: { [Op.like]: searchPattern } }
+        ]
+      },
+      order: [['createdAt', 'DESC']],
+      limit: parseInt(limit),
+      offset
+    });
     
     const formattedTrainings = trainings.map(training => 
       formatTrainingResponse(training, false)
@@ -889,8 +858,8 @@ const searchTrainings = async (req, res) => {
       trainings: formattedTrainings,
       pagination: {
         currentPage: parseInt(page),
-        totalPages: Math.ceil(total / parseInt(limit)),
-        totalResults: total,
+        totalPages: Math.ceil(count / parseInt(limit)),
+        totalResults: count,
         query: q
       }
     });
@@ -919,3 +888,4 @@ module.exports = {
   getTrainingCategories,
   searchTrainings,
 };
+

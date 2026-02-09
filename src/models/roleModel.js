@@ -1,44 +1,66 @@
-// src/models/roleModel.js
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const { sequelize } = require('../db/connect');
 
-const roleSchema = new mongoose.Schema({
-  name: {
-    type: String,
-    required: [true, 'Role name is required'],
-    unique: true,
-    trim: true,
-    lowercase: true,
-    enum: ['admin', 'user', 'editor', 'viewer', 'manager', 'supervisor']
-  },
-  description: {
-    type: String,
-    trim: true,
-    maxlength: [500, 'Description cannot exceed 500 characters']
-  },
-  permissions: [{
-    type: String,
-    trim: true
-  }],
-  isActive: {
-    type: Boolean,
-    default: true
-  },
-  isDefault: {
-    type: Boolean,
-    default: false
-  },
-  createdBy: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
-  },
-  updatedBy: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
-  }
+const Role = sequelize.define('Role', {
+    id: {
+        type: DataTypes.INTEGER,
+        primaryKey: true,
+        autoIncrement: true
+    },
+    name: {
+        type: DataTypes.STRING(50),
+        allowNull: false,
+        unique: true,
+        validate: {
+            isIn: {
+                args: [['admin', 'user', 'editor', 'viewer', 'manager', 'supervisor']],
+                msg: 'Invalid role name'
+            }
+        }
+    },
+    description: {
+        type: DataTypes.STRING(500),
+        allowNull: true
+    },
+    permissions: {
+        type: DataTypes.JSON,
+        allowNull: true,
+        defaultValue: []
+    },
+    isActive: {
+        type: DataTypes.BOOLEAN,
+        defaultValue: true
+    },
+    isDefault: {
+        type: DataTypes.BOOLEAN,
+        defaultValue: false
+    },
+    createdBy: {
+        type: DataTypes.INTEGER,
+        allowNull: true
+    },
+    updatedBy: {
+        type: DataTypes.INTEGER,
+        allowNull: true
+    }
 }, {
-  timestamps: true
+    tableName: 'roles',
+    indexes: [
+        {
+            unique: true,
+            fields: ['name']
+        }
+    ]
 });
 
-const Role = mongoose.model('Role', roleSchema);
+// Class methods
+Role.getDefaultRole = async function() {
+    return await this.findOne({ where: { name: 'user', isDefault: true } }) || 
+           await this.findOne({ where: { name: 'user' } });
+};
+
+Role.findByName = async function(name) {
+    return await this.findOne({ where: { name } });
+};
 
 module.exports = Role;

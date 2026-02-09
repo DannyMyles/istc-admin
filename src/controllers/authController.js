@@ -1,6 +1,7 @@
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
+const { Op } = require('sequelize');
 const { asyncWrapper, HTTP_STATUS_CODES } = require("../middleware/index");
 const { User, Role, Contact, PasswordResetToken } = require("../models");
 const EmailService = require("../utils/emailService");
@@ -9,13 +10,13 @@ require("dotenv").config();
 // Helper function to generate JWT token
 const generateToken = (user) => {
     return jwt.sign(
-        { 
-            userId: user._id, 
+        {
+            userId: user.id,
             roleId: user.roleId,
             role: user.role,
-            email: user.email 
-        }, 
-        process.env.JWT_SECRET_KEY, 
+            email: user.email
+        },
+        process.env.JWT_SECRET_KEY,
         { expiresIn: "3h" }
     );
 };
@@ -29,41 +30,51 @@ const generateResetToken = () => {
 const loginUser = async (req, res) => {
     try {
         const { email, password } = req.body;
-        
+
         if (!email || !password) {
             return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
                 error: 'Email and password are required'
             });
         }
-        
-        const user = await User.findOne({ email }).select('+password').populate('roleId');
-        
+
+        const user = await User.findOne({
+            where: { email },
+            include: [
+                { model: Role, as: 'userRole', attributes: ['id', 'name'] }
+            ]
+        });
+
         if (!user) {
             return res.status(HTTP_STATUS_CODES.UNAUTHORIZED).json({
                 error: 'Invalid credentials'
             });
         }
-        
-        const isPasswordValid = await bcrypt.compare(password, user.password);
-        
+
+        // Need to fetch password separately since it's excluded by default
+        const userWithPassword = await User.findByPk(user.id, {
+            attributes: { include: ['password'] }
+        });
+
+        const isPasswordValid = await bcrypt.compare(password, userWithPassword.password);
+
         if (!isPasswordValid) {
             return res.status(HTTP_STATUS_CODES.UNAUTHORIZED).json({
                 error: 'Invalid credentials'
             });
         }
-        
+
         if (!user.isActive) {
             return res.status(HTTP_STATUS_CODES.FORBIDDEN).json({
                 error: 'Account is deactivated'
             });
         }
-        
+
         const token = generateToken(user);
-        
+
         // Remove sensitive data
-        const userResponse = user.toObject();
+        const userResponse = user.toJSON ? user.toJSON() : { ...user.get() };
         delete userResponse.password;
-        
+
         return res.status(HTTP_STATUS_CODES.OK).json({
             message: 'Login successful',
             user: userResponse,
@@ -80,9 +91,6 @@ const loginUser = async (req, res) => {
 // ==================== LOGOUT ====================
 const logoutUser = async (req, res) => {
     try {
-        // In a stateless JWT system, you can't really "logout" server-side
-        // unless you implement a token blacklist
-        // For now, just return success - client should delete token
         return res.status(HTTP_STATUS_CODES.OK).json({
             message: 'Logged out successfully'
         });
@@ -97,16 +105,21 @@ const logoutUser = async (req, res) => {
 // ==================== GET CURRENT USER ====================
 const getCurrentUser = async (req, res) => {
     try {
-        const user = await User.findById(req.userId).select('-password').populate('roleId');
-        
+        const user = await User.findByPk(req.userId, {
+            attributes: { exclude: ['password'] },
+            include: [
+                { model: Role, as: 'userRole', attributes: ['id', 'name'] }
+            ]
+        });
+
         if (!user) {
             return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
                 error: 'User not found'
             });
         }
-        
+
         return res.status(HTTP_STATUS_CODES.OK).json({
-            user
+            user: user.toJSON ? user.toJSON() : user.get()
         });
     } catch (error) {
         console.error('Get current user error:', error);
@@ -121,38 +134,49 @@ const updateProfile = async (req, res) => {
     try {
         const { name, username, email } = req.body;
         const userId = req.userId;
-        
+
         const updates = {};
         if (name) updates.name = name;
         if (username) updates.username = username;
         if (email) updates.email = email;
-        
-        const user = await User.findByIdAndUpdate(
-            userId,
+
+        const user = await User.update(
             updates,
-            { new: true, runValidators: true }
-        ).select('-password').populate('roleId');
-        
-        if (!user) {
+            {
+                where: { id: userId },
+                returning: true,
+                individualHooks: true
+            }
+        );
+
+        // Fetch the updated user
+        const updatedUser = await User.findByPk(userId, {
+            attributes: { exclude: ['password'] },
+            include: [
+                { model: Role, as: 'userRole', attributes: ['id', 'name'] }
+            ]
+        });
+
+        if (!updatedUser) {
             return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
                 error: 'User not found'
             });
         }
-        
+
         return res.status(HTTP_STATUS_CODES.OK).json({
             message: 'Profile updated successfully',
-            user
+            user: updatedUser.toJSON ? updatedUser.toJSON() : updatedUser.get()
         });
     } catch (error) {
         console.error('Update profile error:', error);
-        
-        if (error.code === 11000) {
-            const field = error.keyPattern.email ? 'email' : 'username';
+
+        if (error.name === 'SequelizeUniqueConstraintError') {
+            const field = error.errors[0].path === 'email' ? 'email' : 'username';
             return res.status(HTTP_STATUS_CODES.CONFLICT).json({
                 error: `User with this ${field} already exists`
             });
         }
-        
+
         return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).json({
             error: 'Failed to update profile'
         });
@@ -172,9 +196,12 @@ const submitContactForm = async (req, res) => {
         }
 
         // Check for spam (multiple submissions within 5 minutes)
+        const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
         const recentSubmission = await Contact.findOne({
-            email,
-            createdAt: { $gte: new Date(Date.now() - 5 * 60 * 1000) }
+            where: {
+                email,
+                createdAt: { [Op.gte]: fiveMinutesAgo }
+            }
         });
 
         if (recentSubmission) {
@@ -184,7 +211,7 @@ const submitContactForm = async (req, res) => {
         }
 
         // Create contact submission
-        const contact = new Contact({
+        const contact = await Contact.create({
             name,
             email,
             subject,
@@ -193,8 +220,6 @@ const submitContactForm = async (req, res) => {
             category: category || 'general',
             userId: req.userId || null
         });
-
-        await contact.save();
 
         // Send confirmation email to user
         await EmailService.sendContactConfirmation(email, name, message);
@@ -212,7 +237,7 @@ const submitContactForm = async (req, res) => {
 
         return res.status(HTTP_STATUS_CODES.CREATED).json({
             message: 'Thank you for contacting us. We will get back to you soon.',
-            contactId: contact._id
+            contactId: contact.id
         });
     } catch (error) {
         console.error('Error submitting contact form:', error);
@@ -242,46 +267,43 @@ const registerUser = async (req, res) => {
         }
 
         // Check existing user
-        const existingUser = await User.findOne({ 
-            $or: [{ email }, { username }] 
+        const existingUser = await User.findOne({
+            where: {
+                [Op.or]: [{ email }, { username }]
+            }
         });
-        
+
         if (existingUser) {
             const field = existingUser.email === email ? "email" : "username";
-            return res.status(HTTP_STATUS_CODES.CONFLICT).json({ 
-                message: `User with this ${field} already exists` 
+            return res.status(HTTP_STATUS_CODES.CONFLICT).json({
+                message: `User with this ${field} already exists`
             });
         }
 
         // Determine role
         let role;
         if (roleName) {
-            role = await Role.findOne({ name: roleName });
+            role = await Role.findOne({ where: { name: roleName } });
             if (!role) {
-                const availableRoles = await Role.find({ isActive: true }, 'name');
-                return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ 
-                    message: `Invalid role. Available roles: ${availableRoles.map(r => r.name).join(', ')}` 
+                const availableRoles = await Role.findAll({ where: { isActive: true }, attributes: ['name'] });
+                return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+                    message: `Invalid role. Available roles: ${availableRoles.map(r => r.name).join(', ')}`
                 });
             }
         } else {
             // Default role for new users
-            role = await Role.findOne({ name: 'user', isDefault: true });
-            if (!role) {
-                role = await Role.findOne({ name: 'user' });
-            }
+            role = await Role.getDefaultRole();
         }
 
         // Create user
-        const user = new User({
+        const user = await User.create({
             name,
             username,
             email,
             password,
-            roleId: role._id,
+            roleId: role.id,
             role: role.name
         });
-
-        await user.save();
 
         // Send welcome email
         await EmailService.sendWelcomeEmail(email, name);
@@ -290,29 +312,28 @@ const registerUser = async (req, res) => {
         const token = generateToken(user);
 
         // Remove sensitive data from response
-        const userResponse = user.toObject();
-        delete userResponse.password;
+        const userResponse = {
+            id: user.id,
+            name: user.name,
+            email: user.email,
+            username: user.username,
+            role: user.role
+        };
 
         return res.status(HTTP_STATUS_CODES.CREATED).json({
             message: "Registration successful",
-            user: {
-                id: user._id,
-                name: user.name,
-                email: user.email,
-                username: user.username,
-                role: user.role
-            },
+            user: userResponse,
             token
         });
     } catch (error) {
         console.error("Registration error:", error);
-        
-        if (error.code === 11000) {
+
+        if (error.name === 'SequelizeUniqueConstraintError') {
             return res.status(HTTP_STATUS_CODES.CONFLICT).json({
                 message: "User already exists"
             });
         }
-        
+
         return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).json({
             message: "Registration failed"
         });
@@ -323,15 +344,15 @@ const registerUser = async (req, res) => {
 const forgotPassword = async (req, res) => {
     try {
         const { email } = req.body;
-        
+
         if (!email) {
             return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
                 error: 'Email is required'
             });
         }
 
-        const user = await User.findOne({ email });
-        
+        const user = await User.findOne({ where: { email } });
+
         // For security, don't reveal if user exists
         if (!user) {
             return res.status(HTTP_STATUS_CODES.OK).json({
@@ -340,10 +361,13 @@ const forgotPassword = async (req, res) => {
         }
 
         // Check for recent reset requests
+        const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
         const recentRequest = await PasswordResetToken.findOne({
-            userId: user._id,
-            createdAt: { $gte: new Date(Date.now() - 5 * 60 * 1000) },
-            isUsed: false
+            where: {
+                userId: user.id,
+                createdAt: { [Op.gte]: fiveMinutesAgo },
+                isUsed: false
+            }
         });
 
         if (recentRequest) {
@@ -356,15 +380,13 @@ const forgotPassword = async (req, res) => {
         const resetToken = generateResetToken();
         const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
 
-        const resetTokenDoc = new PasswordResetToken({
-            userId: user._id,
+        await PasswordResetToken.create({
+            userId: user.id,
             token: resetToken,
             expiresAt,
             ipAddress: req.ip,
             userAgent: req.headers['user-agent']
         });
-
-        await resetTokenDoc.save();
 
         // Send reset email
         const resetLink = `${process.env.FRONTEND_URL}/reset-password?token=${resetToken}`;
@@ -385,7 +407,7 @@ const forgotPassword = async (req, res) => {
 const resetPassword = async (req, res) => {
     try {
         const { token, newPassword, confirmPassword } = req.body;
-        
+
         if (!token || !newPassword || !confirmPassword) {
             return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
                 error: 'Token and new password are required'
@@ -408,10 +430,15 @@ const resetPassword = async (req, res) => {
 
         // Find valid reset token
         const resetTokenDoc = await PasswordResetToken.findOne({
-            token,
-            expiresAt: { $gt: new Date() },
-            isUsed: false
-        }).populate('userId');
+            where: {
+                token,
+                expiresAt: { [Op.gt]: new Date() },
+                isUsed: false
+            },
+            include: [
+                { model: User, as: 'user', attributes: ['id', 'password'] }
+            ]
+        });
 
         if (!resetTokenDoc) {
             return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
@@ -419,7 +446,7 @@ const resetPassword = async (req, res) => {
             });
         }
 
-        const user = resetTokenDoc.userId;
+        const user = resetTokenDoc.user || await User.findByPk(resetTokenDoc.userId);
 
         // Check if new password is same as old
         const isSamePassword = await bcrypt.compare(newPassword, user.password);
@@ -436,9 +463,6 @@ const resetPassword = async (req, res) => {
         // Mark token as used
         resetTokenDoc.isUsed = true;
         await resetTokenDoc.save();
-
-        // Invalidate all existing sessions/tokens (optional)
-        // Add to token blacklist if using JWT blacklisting
 
         // Send confirmation email
         await EmailService.sendPasswordChangedNotification(user.email, user.name);
@@ -460,9 +484,11 @@ const verifyResetToken = async (req, res) => {
         const { token } = req.params;
 
         const resetTokenDoc = await PasswordResetToken.findOne({
-            token,
-            expiresAt: { $gt: new Date() },
-            isUsed: false
+            where: {
+                token,
+                expiresAt: { [Op.gt]: new Date() },
+                isUsed: false
+            }
         });
 
         if (!resetTokenDoc) {
@@ -489,7 +515,7 @@ const changePassword = async (req, res) => {
     try {
         const { currentPassword, newPassword, confirmPassword } = req.body;
         const userId = req.userId;
-        
+
         if (!currentPassword || !newPassword || !confirmPassword) {
             return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
                 error: 'All password fields are required'
@@ -502,8 +528,8 @@ const changePassword = async (req, res) => {
             });
         }
 
-        const user = await User.findById(userId).select('+password');
-        
+        const user = await User.findByPk(userId);
+
         if (!user) {
             return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
                 error: 'User not found'
@@ -564,3 +590,4 @@ module.exports = {
     verifyResetToken,
     changePassword
 };
+

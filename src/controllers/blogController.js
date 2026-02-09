@@ -1,4 +1,5 @@
-const Blog = require('../models/blogModel');
+const { Op } = require('sequelize');
+const { Blog, User } = require('../models');
 const HTTP_STATUS_CODES = require('../utils/statusCodes');
 
 const createBlog = async (req, res) => {
@@ -51,21 +52,20 @@ const createBlog = async (req, res) => {
       blogData.imageUrl = 'https://cdn.dribbble.com/userupload/41784969/file/still-f9b1bc8254d3e952592927149caef80f.gif?resize=400x0';
     }
 
-    const blog = new Blog(blogData);
-    await blog.save();
+    const blog = await Blog.create(blogData);
 
     return res.status(201).json({
       message: 'Blog created successfully',
       blog: {
-        id: blog._id,
+        id: blog.id,
         title: blog.title,
         slug: blog.slug,
         excerpt: blog.excerpt,
         category: blog.category,
         author: blog.author,
-        date: blog.formattedDate,
+        date: blog.formattedDate(),
         readTime: blog.readTime,
-        image: blog.imageUrlFormatted,
+        image: blog.imageUrlFormatted(),
         imageInfo: blog.getImageInfo()
       }
     });
@@ -79,14 +79,16 @@ const createBlog = async (req, res) => {
 const getBlogImage = async (req, res) => {
   try {
     const { id } = req.params;
-    
-    const blog = await Blog.findById(id).select('image.data image.contentType');
-    
+
+    const blog = await Blog.findByPk(id, {
+      attributes: ['image']
+    });
+
     if (!blog || !blog.image || !blog.image.data) {
       // Return placeholder if no image
       return res.redirect('https://cdn.dribbble.com/userupload/41784969/file/still-f9b1bc8254d3e952592927149caef80f.gif?resize=400x0');
     }
-    
+
     // Set content type and send image buffer
     res.set('Content-Type', blog.image.contentType);
     res.set('Cache-Control', 'public, max-age=31536000'); // Cache for 1 year
@@ -102,18 +104,20 @@ const getBlogImage = async (req, res) => {
 const getBlogImageWithInfo = async (req, res) => {
   try {
     const { id } = req.params;
-    
-    const blog = await Blog.findById(id).select('image.data image.contentType image.filename image.size');
-    
+
+    const blog = await Blog.findByPk(id, {
+      attributes: ['image']
+    });
+
     if (!blog || !blog.image || !blog.image.data) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
         error: 'Image not found'
       });
     }
-    
+
     // Send image info and base64 encoded image
     const imageBase64 = blog.image.data.toString('base64');
-    
+
     return res.status(HTTP_STATUS_CODES.OK).json({
       image: {
         contentType: blog.image.contentType,
@@ -135,10 +139,10 @@ const getBlogImageWithInfo = async (req, res) => {
 const updateBlog = async (req, res) => {
   try {
     const { id } = req.params;
-    
+
     // Find existing blog
-    const existingBlog = await Blog.findById(id);
-    
+    const existingBlog = await Blog.findByPk(id);
+
     if (!existingBlog) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
         error: 'Blog not found'
@@ -147,7 +151,7 @@ const updateBlog = async (req, res) => {
 
     // Prepare updates
     const updates = { ...req.body };
-    
+
     // Handle new file upload
     if (req.file) {
       // File validation is already done by multer, but double-check
@@ -156,7 +160,7 @@ const updateBlog = async (req, res) => {
           error: 'Image size exceeds 16MB limit'
         });
       }
-      
+
       updates.image = {
         data: req.file.buffer,
         contentType: req.file.mimetype,
@@ -166,7 +170,7 @@ const updateBlog = async (req, res) => {
       // Clear imageUrl if uploading new image
       updates.imageUrl = null;
     }
-    
+
     // If imageUrl is provided and no file uploaded, clear stored image
     if (req.body.imageUrl && !req.file) {
       updates.image = {
@@ -178,42 +182,43 @@ const updateBlog = async (req, res) => {
     }
 
     // Find and update blog
-    const blog = await Blog.findByIdAndUpdate(
-      id,
+    await Blog.update(
       { $set: updates },
-      { new: true, runValidators: true }
+      { where: { id }, individualHooks: true }
     );
+
+    const blog = await Blog.findByPk(id);
 
     return res.status(HTTP_STATUS_CODES.OK).json({
       message: 'Blog updated successfully',
       blog: {
-        id: blog._id,
+        id: blog.id,
         title: blog.title,
         slug: blog.slug,
         excerpt: blog.excerpt,
         category: blog.category,
         author: blog.author,
-        date: blog.formattedDate,
+        date: blog.formattedDate(),
         readTime: blog.readTime,
-        image: blog.imageUrlFormatted,
+        image: blog.imageUrlFormatted(),
         imageInfo: blog.getImageInfo(),
         featured: blog.featured
       }
     });
   } catch (error) {
     console.error('Error updating blog:', error);
-    
-    if (error.name === 'ValidationError') {
-      const errors = Object.values(error.errors).map(err => err.message);
+
+    if (error.name === 'SequelizeValidationError') {
+      const errors = error.errors.map(err => err.message);
       return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ error: errors.join(', ') });
     }
-    
-    if (error.code === 11000) {
+
+    if (error.name === 'SequelizeUniqueConstraintError') {
       return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
         error: 'A blog with similar title already exists'
       });
     }
-    
+
     return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).json({
       error: 'An error occurred while updating the blog'
     });
@@ -224,15 +229,17 @@ const updateBlog = async (req, res) => {
 const deleteBlog = async (req, res) => {
   try {
     const { id } = req.params;
-    
-    const blog = await Blog.findByIdAndDelete(id);
-    
+
+    const blog = await Blog.destroy({
+      where: { id }
+    });
+
     if (!blog) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
         error: 'Blog not found'
       });
     }
-    
+
     return res.status(HTTP_STATUS_CODES.OK).json({
       message: 'Blog deleted successfully'
     });
@@ -247,56 +254,63 @@ const deleteBlog = async (req, res) => {
 // Update getAllBlogs to include image info
 const getAllBlogs = async (req, res) => {
   try {
-    const { 
-      page = 1, 
-      limit = 10, 
-      category, 
-      featured, 
+    const {
+      page = 1,
+      limit = 10,
+      category,
+      featured,
       search,
-      sort = '-createdAt' 
+      sort = 'createdAt',
+      order = 'DESC'
     } = req.query;
-    
+
     const query = { published: true };
-    
+
     if (category) query.category = category;
     if (featured !== undefined) query.featured = featured === 'true';
-    if (search) query.$text = { $search: search };
-    
-    const skip = (parseInt(page) - 1) * parseInt(limit);
-    
-    const [blogs, total] = await Promise.all([
-      Blog.find(query)
-        .select('-content -__v') // REMOVED -image.data from here
-        .sort(sort)
-        .skip(skip)
-        .limit(parseInt(limit)),
-      Blog.countDocuments(query)
-    ]);
-    
+
+    // For search, we'll use LIKE for MySQL
+    if (search) {
+      query[Op.or] = [
+        { title: { [Op.like]: `%${search}%` } },
+        { excerpt: { [Op.like]: `%${search}%` } }
+      ];
+    }
+
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+    const orderArr = [[sort, order]];
+
+    const { count, rows: blogs } = await Blog.findAndCountAll({
+      where: query,
+      order: orderArr,
+      limit: parseInt(limit),
+      offset
+    });
+
     const formattedBlogs = blogs.map(blog => ({
-      id: blog._id,
+      id: blog.id,
       title: blog.title,
       slug: blog.slug,
       excerpt: blog.excerpt,
       category: blog.category,
       author: blog.author,
-      date: blog.formattedDate,
+      date: blog.formattedDate(),
       readTime: blog.readTime,
-      image: blog.imageUrlFormatted,
+      image: blog.imageUrlFormatted(),
       imageInfo: blog.getImageInfo(),
       featured: blog.featured,
       views: blog.views,
       likes: blog.likes,
       tags: blog.tags
     }));
-    
+
     return res.status(HTTP_STATUS_CODES.OK).json({
       blogs: formattedBlogs,
       pagination: {
         currentPage: parseInt(page),
-        totalPages: Math.ceil(total / parseInt(limit)),
-        totalBlogs: total,
-        hasNextPage: skip + blogs.length < total,
+        totalPages: Math.ceil(count / parseInt(limit)),
+        totalBlogs: count,
+        hasNextPage: offset + blogs.length < count,
         hasPrevPage: page > 1
       }
     });
@@ -312,29 +326,30 @@ const getAllBlogs = async (req, res) => {
 const getBlogBySlug = async (req, res) => {
   try {
     const { slug } = req.params;
-    
-    const blog = await Blog.findOneAndUpdate(
-      { slug },
-      { $inc: { views: 1 } },
-      { new: true }
-    ).populate('authorId', 'name email');
-    
+
+    const blog = await Blog.findOne({
+      where: { slug }
+    });
+
     if (!blog) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
         error: 'Blog not found'
       });
     }
-    
-    // Convert blog to object and remove image buffer
-    const blogObject = blog.toObject();
-    if (blogObject.image && blogObject.image.data) {
-      blogObject.image.hasBuffer = true;
-      delete blogObject.image.data;
+
+    // Increment views
+    await blog.increment('views');
+
+    // Remove image buffer from response
+    const blogData = blog.toJSON ? blog.toJSON() : blog.get();
+    if (blogData.image && blogData.image.data) {
+      blogData.image.hasBuffer = true;
+      delete blogData.image.data;
     }
-    
+
     return res.status(HTTP_STATUS_CODES.OK).json({
       blog: {
-        id: blog._id,
+        id: blog.id,
         title: blog.title,
         slug: blog.slug,
         excerpt: blog.excerpt,
@@ -342,10 +357,9 @@ const getBlogBySlug = async (req, res) => {
         category: blog.category,
         tags: blog.tags,
         author: blog.author,
-        authorDetails: blog.authorId,
-        date: blog.formattedDate,
+        date: blog.formattedDate(),
         readTime: blog.readTime,
-        image: blog.imageUrlFormatted,
+        image: blog.imageUrlFormatted(),
         imageInfo: blog.getImageInfo(),
         featured: blog.featured,
         views: blog.views,
@@ -368,18 +382,18 @@ const getBlogBySlug = async (req, res) => {
 const getBlogById = async (req, res) => {
   try {
     const { id } = req.params;
-    
-    const blog = await Blog.findById(id);
-    
+
+    const blog = await Blog.findByPk(id);
+
     if (!blog) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
         error: 'Blog not found'
       });
     }
-    
+
     return res.status(HTTP_STATUS_CODES.OK).json({
       blog: {
-        id: blog._id,
+        id: blog.id,
         title: blog.title,
         slug: blog.slug,
         excerpt: blog.excerpt,
@@ -387,9 +401,9 @@ const getBlogById = async (req, res) => {
         category: blog.category,
         tags: blog.tags,
         author: blog.author,
-        date: blog.formattedDate,
+        date: blog.formattedDate(),
         readTime: blog.readTime,
-        image: blog.imageUrlFormatted,
+        image: blog.imageUrlFormatted(),
         imageInfo: blog.getImageInfo(),
         featured: blog.featured,
         views: blog.views,
@@ -407,28 +421,29 @@ const getBlogById = async (req, res) => {
 // Get featured blogs
 const getFeaturedBlogs = async (req, res) => {
   try {
-    const blogs = await Blog.find({ 
-      featured: true, 
-      published: true 
-    })
-    .select('-content -__v')
-    .sort('-createdAt')
-    .limit(5);
-    
+    const blogs = await Blog.findAll({
+      where: {
+        featured: true,
+        published: true
+      },
+      order: [['createdAt', 'DESC']],
+      limit: 5
+    });
+
     const formattedBlogs = blogs.map(blog => ({
-      id: blog._id,
+      id: blog.id,
       title: blog.title,
       slug: blog.slug,
       excerpt: blog.excerpt,
       category: blog.category,
       author: blog.author,
-      date: blog.formattedDate,
+      date: blog.formattedDate(),
       readTime: blog.readTime,
-      image: blog.imageUrlFormatted,
+      image: blog.imageUrlFormatted(),
       imageInfo: blog.getImageInfo(),
       featured: blog.featured
     }));
-    
+
     return res.status(HTTP_STATUS_CODES.OK).json({
       blogs: formattedBlogs
     });
@@ -443,16 +458,20 @@ const getFeaturedBlogs = async (req, res) => {
 // Get blog categories
 const getBlogCategories = async (req, res) => {
   try {
-    const categories = await Blog.aggregate([
-      { $match: { published: true } },
-      { $group: { _id: '$category', count: { $sum: 1 } } },
-      { $sort: { count: -1 } }
-    ]);
-    
+    const categories = await Blog.findAll({
+      where: { published: true },
+      attributes: [
+        'category',
+        [require('sequelize').fn('COUNT', require('sequelize').col('id')), 'count']
+      ],
+      group: ['category'],
+      order: [[require('sequelize').fn('COUNT', require('sequelize').col('id')), 'DESC']]
+    });
+
     return res.status(HTTP_STATUS_CODES.OK).json({
       categories: categories.map(cat => ({
-        name: cat._id,
-        count: cat.count
+        name: cat.category,
+        count: parseInt(cat.get('count'))
       }))
     });
   } catch (error) {
@@ -467,22 +486,20 @@ const getBlogCategories = async (req, res) => {
 const likeBlog = async (req, res) => {
   try {
     const { id } = req.params;
-    
-    const blog = await Blog.findByIdAndUpdate(
-      id,
-      { $inc: { likes: 1 } },
-      { new: true }
-    );
-    
+
+    const blog = await Blog.findByPk(id);
+
     if (!blog) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
         error: 'Blog not found'
       });
     }
-    
+
+    await blog.increment('likes');
+
     return res.status(HTTP_STATUS_CODES.OK).json({
       message: 'Blog liked successfully',
-      likes: blog.likes
+      likes: blog.likes + 1
     });
   } catch (error) {
     console.error('Error liking blog:', error);
@@ -495,47 +512,21 @@ const likeBlog = async (req, res) => {
 // Get blog statistics
 const getBlogStats = async (req, res) => {
   try {
-    const stats = await Blog.aggregate([
-      {
-        $group: {
-          _id: null,
-          totalBlogs: { $sum: 1 },
-          blogsWithImages: {
-            $sum: {
-              $cond: [
-                { $and: [
-                  { $gt: ['$image.size', 0] },
-                  { $ne: ['$image.data', null] }
-                ]}, 
-                1, 
-                0
-              ]
-            }
-          },
-          totalImageSize: {
-            $sum: {
-              $cond: ['$image.size', '$image.size', 0]
-            }
-          },
-          avgImageSize: {
-            $avg: {
-              $cond: [{ $gt: ['$image.size', 0] }, '$image.size', null]
-            }
-          },
-          maxImageSize: {
-            $max: '$image.size'
-          }
-        }
-      }
-    ]);
+    const { sequelize } = require('../models');
     
+    const stats = await Blog.findOne({
+      attributes: [
+        [sequelize.fn('COUNT', sequelize.col('id')), 'totalBlogs'],
+        [sequelize.fn('SUM', sequelize.literal('CASE WHEN image IS NOT NULL AND JSON_EXTRACT(image, "$.size") > 0 THEN 1 ELSE 0 END')), 'blogsWithImages'],
+        [sequelize.fn('SUM', sequelize.col('views')), 'totalViews']
+      ]
+    });
+
     return res.status(HTTP_STATUS_CODES.OK).json({
-      stats: stats[0] || {
-        totalBlogs: 0,
-        blogsWithImages: 0,
-        totalImageSize: 0,
-        avgImageSize: 0,
-        maxImageSize: 0
+      stats: {
+        totalBlogs: parseInt(stats.get('totalBlogs')) || 0,
+        blogsWithImages: parseInt(stats.get('blogsWithImages')) || 0,
+        totalViews: parseInt(stats.get('totalViews')) || 0
       }
     });
   } catch (error) {
@@ -560,3 +551,4 @@ module.exports = {
   getBlogImageWithInfo,
   getBlogStats
 };
+

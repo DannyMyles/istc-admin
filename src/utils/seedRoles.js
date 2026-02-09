@@ -1,4 +1,4 @@
-const Role = require('../models/roleModel');
+const { Role } = require('../models');
 
 const seedRoles = async () => {
     try {
@@ -10,7 +10,7 @@ const seedRoles = async () => {
         ];
 
         for (const roleData of defaultRoles) {
-            const roleExists = await Role.findOne({ name: roleData.name });
+            const roleExists = await Role.findOne({ where: { name: roleData.name } });
             if (!roleExists) {
                 await Role.create(roleData);
                 console.log(`✅ Created role: ${roleData.name}`);

@@ -1,3 +1,4 @@
+
 const { sequelize } = require('../db/connect');
 const Role = require('./roleModel');
 const User = require('./userModel');
@@ -12,7 +13,7 @@ const Training = require('./trainingModel');
 // User - Role (Many-to-One)
 User.belongsTo(Role, {
     foreignKey: 'roleId',
-    as: 'userRole'
+    as: 'role'
 });
 Role.hasMany(User, {
     foreignKey: 'roleId',
@@ -22,7 +23,7 @@ Role.hasMany(User, {
 // Blog - User (Many-to-One)
 Blog.belongsTo(User, {
     foreignKey: 'authorId',
-    as: 'blogAuthor'
+    as: 'author'
 });
 User.hasMany(Blog, {
     foreignKey: 'authorId',
@@ -58,6 +59,14 @@ Testimonial.belongsTo(User, {
     foreignKey: 'updatedBy',
     as: 'updater'
 });
+User.hasMany(Testimonial, {
+    foreignKey: 'createdBy',
+    as: 'testimonialsCreated'
+});
+User.hasMany(Testimonial, {
+    foreignKey: 'updatedBy',
+    as: 'testimonialsUpdated'
+});
 
 // Testimonial - Training (Many-to-One, optional)
 Testimonial.belongsTo(Training, {
@@ -91,4 +100,5 @@ module.exports = {
     // Export Op for queries
     Op: require('sequelize').Op
 };
+
 

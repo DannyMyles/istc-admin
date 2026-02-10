@@ -15,6 +15,7 @@ const seedRoles = require("./utils/seedRoles");
 const seedTestimonials = require("./utils/testimonialSeeder");
 const trainingRoutes = require("./routes/trainingRoutes");
 const testimonialRoutes = require("./routes/testimonialRoutes");
+const contactsRoutes = require("./routes/contactsRoutes");
 
 /* =======================
    CORS CONFIGURATION
@@ -95,7 +96,8 @@ app.get("/", (req, res) => {
       users: "/api/v1/users",
       blogs: "/api/v1/blogs",
       trainings: "/api/v1/trainings",
-      testimonials: "/api/v1/testimonials"
+      testimonials: "/api/v1/testimonials",
+      contacts: "/api/v1/contacts"
     }
   });
 });
@@ -108,6 +110,7 @@ app.use("/api/v1", userRoutes);
 app.use("/api/v1/blogs", blogRoutes);
 app.use("/api/v1/trainings", trainingRoutes);
 app.use("/api/v1/testimonials", testimonialRoutes);
+app.use("/api/v1/contacts", contactsRoutes);
 
 /* =======================
    ERROR HANDLING

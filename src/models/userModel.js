@@ -87,10 +87,8 @@ const User = sequelize.define('User', {
             fields: ['username']
         },
         {
-            fields: ['role_id']
-        },
-        {
-            fields: ['is_active']
+            // Single composite index for role-based queries
+            fields: ['role_id', 'is_active']
         }
     ],
     hooks: {

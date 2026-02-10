@@ -78,19 +78,19 @@ const authenticate = (req, res, next) => {
 
 const authorize = (roles = []) => {
   return (req, res, next) => {
-    if (!req.userRole) {
+    if (!req.userId) {
       return res.status(HTTP_STATUS_CODES.UNAUTHORIZED).json({
         error: 'User not authenticated'
       });
     }
-    
+
     // If roles array is empty, allow all authenticated users
-    if (roles.length > 0 && !roles.includes(req.userRole)) {
+    if (roles.length > 0 && (!req.userRole || !roles.includes(req.userRole))) {
       return res.status(HTTP_STATUS_CODES.FORBIDDEN).json({
         error: `Access denied. Required role: ${roles.join(', ')}`
       });
     }
-    
+
     next();
   };
 };
@@ -99,3 +99,4 @@ const authorize = (roles = []) => {
 const authenticateUser = authenticate;
 
 module.exports = { authenticate, authorize, authenticateUser };
+

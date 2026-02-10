@@ -536,8 +536,8 @@ const addTrainingSession = async (req, res) => {
       });
     }
     
-    // Get current sessions
-    const sessions = training.sessions || [];
+    // Get current sessions - ensure it's always an array
+    const sessions = Array.isArray(training.sessions) ? training.sessions : [];
     
     // Check for overlapping sessions
     const hasOverlap = sessions.some(session => {
@@ -616,7 +616,8 @@ const updateTrainingSession = async (req, res) => {
       });
     }
     
-    const sessions = training.sessions || [];
+    // Ensure sessions is always an array
+    const sessions = Array.isArray(training.sessions) ? training.sessions : [];
     const sessionIndex = sessions.findIndex(session => session.id === sessionIdNum);
     
     if (sessionIndex === -1) {
@@ -686,7 +687,8 @@ const deleteTrainingSession = async (req, res) => {
       });
     }
     
-    const sessions = training.sessions || [];
+    // Ensure sessions is always an array
+    const sessions = Array.isArray(training.sessions) ? training.sessions : [];
     const sessionIndex = sessions.findIndex(session => session.id === sessionIdNum);
     
     if (sessionIndex === -1) {
@@ -768,7 +770,8 @@ const getUpcomingTrainings = async (req, res) => {
     
     // Filter for upcoming sessions in JavaScript
     const upcomingTrainings = trainings.filter(training => {
-      const sessions = training.sessions || [];
+      // Ensure sessions is always an array
+      const sessions = Array.isArray(training.sessions) ? training.sessions : [];
       return sessions.some(session => 
         session.status === 'scheduled' && new Date(session.startDate) > today
       );

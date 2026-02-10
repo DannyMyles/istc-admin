@@ -29,12 +29,9 @@ const connectDB = async () => {
         await sequelize.authenticate();
         console.log('✅ MySQL Database Connected Successfully!');
         
-        // Sync models (use { alter: true } in development to update schema)
-        const syncOption = process.env.NODE_ENV === 'development' ? { alter: true } : false;
-        if (syncOption) {
-            await sequelize.sync(syncOption);
-            console.log('✅ Database models synchronized');
-        }
+        // Sync disabled - database already has too many indexes (64-key limit reached)
+        // Schema is already defined. For any schema changes, use manual SQL migrations.
+        console.log('ℹ️ Database sync skipped (schema already defined)');
         
         return sequelize;
     } catch (error) {

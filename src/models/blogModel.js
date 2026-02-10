@@ -109,20 +109,11 @@ const Blog = sequelize.define('Blog', {
             fields: ['slug']
         },
         {
-            fields: ['category']
-        },
-        {
-            fields: ['featured']
-        },
-        {
-            fields: ['published']
+            // Single composite index for common queries
+            fields: ['published', 'featured', 'category']
         },
         {
             fields: ['created_at']
-        },
-        {
-            type: 'FULLTEXT',
-            fields: ['title', 'excerpt', 'content']
         }
     ],
     hooks: {
@@ -178,11 +169,12 @@ Blog.prototype.imageUrlFormatted = function() {
 };
 
 Blog.prototype.getImageInfo = function() {
-    if (this.hasUploadedImage) {
+    // Double check that image exists and has size
+    if (this.image && typeof this.image === 'object' && this.image.size && this.image.size > 0) {
         return {
             hasImage: true,
-            contentType: this.image.contentType,
-            filename: this.image.filename,
+            contentType: this.image.contentType || null,
+            filename: this.image.filename || null,
             size: this.image.size,
             url: `/api/v1/blogs/${this.id}/image`,
             type: 'uploaded'

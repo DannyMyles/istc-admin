@@ -125,10 +125,6 @@ const Training = sequelize.define('Training', {
     indexes: [
         {
             unique: true,
-            fields: ['title']
-        },
-        {
-            unique: true,
             fields: ['slug']
         },
         {
@@ -136,13 +132,8 @@ const Training = sequelize.define('Training', {
             fields: ['code']
         },
         {
-            fields: ['category']
-        },
-        {
-            fields: ['is_featured']
-        },
-        {
-            fields: ['is_active']
+            // Composite index for filtering active/featured trainings
+            fields: ['is_active', 'is_featured', 'category']
         }
     ],
     hooks: {

@@ -28,12 +28,38 @@ const calculateDurationInDays = (startDate, endDate) => {
   return Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1;
 };
 
+// Helper function to safely parse JSON fields (handles both string and object)
+const safeParseJSON = (field, defaultValue = null) => {
+  if (field === null || field === undefined) {
+    return defaultValue;
+  }
+  if (typeof field === 'object') {
+    return field; // Already parsed
+  }
+  if (typeof field === 'string') {
+    try {
+      return JSON.parse(field);
+    } catch (e) {
+      console.error('Error parsing JSON field:', field, e);
+      return defaultValue;
+    }
+  }
+  return defaultValue;
+};
+
 // Helper function to format training response
 const formatTrainingResponse = (training, detailed = false) => {
-  // Manually format sessions to ensure they're included
-  const sessionsArray = Array.isArray(training.sessions) ? training.sessions : [];
+  // Parse sessions - handle both string and array formats from Sequelize
+  const sessionsData = safeParseJSON(training.sessions, []);
+  const sessionsArray = Array.isArray(sessionsData) ? sessionsData : [];
+  
   const formattedSessions = sessionsArray.map(session => ({
-    ...session,
+    startDate: session.startDate,
+    endDate: session.endDate,
+    seats: session.seats,
+    venue: session.venue,
+    instructor: session.instructor,
+    status: session.status || 'scheduled',
     formattedDates: formatSessionDates(session.startDate, session.endDate),
     durationInDays: calculateDurationInDays(session.startDate, session.endDate)
   }));
@@ -43,16 +69,24 @@ const formatTrainingResponse = (training, detailed = false) => {
     s.status === 'scheduled' && new Date(s.startDate) > new Date()
   ).length;
   
+  // Parse other JSON fields that might come as strings
+  const duration = safeParseJSON(training.duration, { value: 0, unit: 'days', display: '0 days' });
+  const cost = safeParseJSON(training.cost, { amount: 0, currency: 'KSH', display: 'KSH 0', taxInclusive: false });
+  const modeOfStudy = safeParseJSON(training.modeOfStudy, ['full-time']);
+  const prerequisites = safeParseJSON(training.prerequisites, []);
+  const learningOutcomes = safeParseJSON(training.learningOutcomes, []);
+  const requirements = safeParseJSON(training.requirements, []);
+  
   const baseResponse = {
     id: training.id,
     code: training.code,
     title: training.title,
     description: training.description,
     targetGroup: training.targetGroup,
-    duration: training.duration?.display || 'N/A',
-    cost: training.cost?.display || 'N/A',
+    duration: duration,
+    cost: cost,
     category: training.category,
-    modeOfStudy: training.modeOfStudy,
+    modeOfStudy: modeOfStudy,
     isFeatured: training.isFeatured,
     registrationFee: training.registrationFee,
     certification: training.certification,
@@ -65,9 +99,9 @@ const formatTrainingResponse = (training, detailed = false) => {
   if (detailed) {
     return {
       ...baseResponse,
-      prerequisites: training.prerequisites || [],
-      learningOutcomes: training.learningOutcomes || [],
-      requirements: training.requirements || [],
+      prerequisites: prerequisites,
+      learningOutcomes: learningOutcomes,
+      requirements: requirements,
       allSessions: sessionsArray,
       createdBy: training.createdBy,
       updatedBy: training.updatedBy,
@@ -154,19 +188,22 @@ const createTraining = async (req, res) => {
       targetGroup,
       duration,
       cost,
-      sessions: sessions.map(session => ({
-        ...session,
-        startDate: new Date(session.startDate),
-        endDate: new Date(session.endDate),
-        status: session.status || 'scheduled',
-        seats: {
-          total: session.seats?.total || 20,
-          booked: session.seats?.booked || 0,
-          available: (session.seats?.total || 20) - (session.seats?.booked || 0)
-        },
-        venue: session.venue || 'ISTC Training Center',
-        instructor: session.instructor
-      })),
+      sessions: sessions.map(session => {
+        const totalSeats = session.seats?.total || 20;
+        return {
+          ...session,
+          startDate: new Date(session.startDate),
+          endDate: new Date(session.endDate),
+          status: session.status || 'scheduled',
+          seats: {
+            total: totalSeats,
+            booked: 0,
+            available: totalSeats
+          },
+          venue: session.venue || 'ISTC Training Center',
+          instructor: session.instructor
+        };
+      }),
       category,
       modeOfStudy: modeOfStudy || ['full-time'],
       prerequisites: prerequisites || [],
@@ -554,14 +591,15 @@ const addTrainingSession = async (req, res) => {
     }
     
     // Create new session
+    const totalSeats = sessionData.seats?.total || 20;
     const newSession = {
       startDate: startDate,
       endDate: endDate,
       status: sessionData.status || 'scheduled',
       seats: {
-        total: sessionData.seats?.total || 20,
-        booked: sessionData.seats?.booked || 0,
-        available: (sessionData.seats?.total || 20) - (sessionData.seats?.booked || 0)
+        total: totalSeats,
+        booked: 0,
+        available: totalSeats
       },
       venue: sessionData.venue || 'ISTC Training Center',
       instructor: sessionData.instructor

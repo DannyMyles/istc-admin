@@ -304,15 +304,18 @@ const getAllBlogs = async (req, res) => {
       tags: blog.tags
     }));
 
+    const total = Number(count) || 0;
     return res.status(HTTP_STATUS_CODES.OK).json({
       blogs: formattedBlogs,
       pagination: {
         currentPage: parseInt(page),
-        totalPages: Math.ceil(count / parseInt(limit)),
-        totalBlogs: count,
-        hasNextPage: offset + blogs.length < count,
-        hasPrevPage: page > 1
-      }
+        totalPages: Math.ceil(total / parseInt(limit)),
+        totalBlogs: total,
+        hasNextPage: offset + formattedBlogs.length < total,
+        hasPrevPage: parseInt(page) > 1,
+        totalCount: total  // Extra top-level for frontend compatibility
+      },
+      totalBlogs: total  // Direct top-level access for frontend fix
     });
   } catch (error) {
     console.error('Error fetching blogs:', error);
@@ -514,19 +517,26 @@ const getBlogStats = async (req, res) => {
   try {
     const { sequelize } = require('../models');
     
-    const stats = await Blog.findOne({
-      attributes: [
-        [sequelize.fn('COUNT', sequelize.col('id')), 'totalBlogs'],
-        [sequelize.fn('SUM', sequelize.literal('CASE WHEN image IS NOT NULL AND JSON_EXTRACT(image, "$.size") > 0 THEN 1 ELSE 0 END')), 'blogsWithImages'],
-        [sequelize.fn('SUM', sequelize.col('views')), 'totalViews']
-      ]
-    });
+    const [results] = await sequelize.query(`
+      SELECT 
+        COUNT(*) as totalBlogs,
+        SUM(CASE WHEN image IS NOT NULL AND JSON_EXTRACT(image, '$.size') > 0 THEN 1 ELSE 0 END) as blogsWithImages,
+        SUM(views) as totalViews,
+        SUM(CASE WHEN image IS NOT NULL AND JSON_EXTRACT(image, '$.size') > 0 THEN JSON_EXTRACT(image, '$.size') ELSE 0 END) as totalImageSize,
+        AVG(CASE WHEN image IS NOT NULL AND JSON_EXTRACT(image, '$.size') > 0 THEN JSON_EXTRACT(image, '$.size') ELSE NULL END) as avgImageSize,
+        MAX(CASE WHEN image IS NOT NULL AND JSON_EXTRACT(image, '$.size') > 0 THEN JSON_EXTRACT(image, '$.size') ELSE NULL END) as maxImageSize
+      FROM blogs
+    `);
 
+    const totalBlogs = parseInt(results[0]?.totalBlogs) || 0;
     return res.status(HTTP_STATUS_CODES.OK).json({
+      totalBlogs,
       stats: {
-        totalBlogs: parseInt(stats.get('totalBlogs')) || 0,
-        blogsWithImages: parseInt(stats.get('blogsWithImages')) || 0,
-        totalViews: parseInt(stats.get('totalViews')) || 0
+        totalBlogs,
+        blogsWithImages: parseInt(results[0]?.blogsWithImages) || 0,
+        totalImageSize: parseInt(results[0]?.totalImageSize) || 0,
+        avgImageSize: parseInt(results[0]?.avgImageSize) || 0,
+        maxImageSize: parseInt(results[0]?.maxImageSize) || 0
       }
     });
   } catch (error) {

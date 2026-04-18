@@ -1,5 +1,7 @@
-const { DataTypes } = require('sequelize');
+const { DataTypes, Op } = require('sequelize');
 const { sequelize } = require('../db/connect');
+const path = require('path');
+const fs = require('fs');
 
 const Blog = sequelize.define('Blog', {
     id: {
@@ -109,7 +111,6 @@ const Blog = sequelize.define('Blog', {
             fields: ['slug']
         },
         {
-            // Single composite index for common queries
             fields: ['published', 'featured', 'category']
         },
         {
@@ -121,8 +122,8 @@ const Blog = sequelize.define('Blog', {
             if (blog.title) {
                 blog.slug = blog.title
                     .toLowerCase()
-                    .replace(/[^\w\s]/gi, '')
-                    .replace(/\s+/g, '-')
+                    .replace(/[^\\w\\s]/gi, '')
+                    .replace(/\\s+/g, '-')
                     .replace(/-+/g, '-')
                     .trim();
             }
@@ -131,8 +132,8 @@ const Blog = sequelize.define('Blog', {
             if (blog.changed('title')) {
                 blog.slug = blog.title
                     .toLowerCase()
-                    .replace(/[^\w\s]/gi, '')
-                    .replace(/\s+/g, '-')
+                    .replace(/[^\\w\\s]/gi, '')
+                    .replace(/\\s+/g, '-')
                     .replace(/-+/g, '-')
                     .trim();
             }
@@ -140,24 +141,48 @@ const Blog = sequelize.define('Blog', {
     }
 });
 
-// Virtual properties and helpers
-Blog.prototype.formattedDate = function() {
-    if (!this.createdAt) return '';
-    const date = new Date(this.createdAt);
-    return date.toLocaleDateString('en-US', {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric'
-    });
+// Virtual properties and helpers - UPDATED FOR FILESYSTEM STORAGE
+Blog.prototype.getImageObject = function() {
+    if (!this.image) return null;
+
+    if (Buffer.isBuffer(this.image)) {
+        try {
+            return JSON.parse(this.image.toString('utf8'));
+        } catch (err) {
+            console.warn('Failed to parse image buffer:', err.message);
+            return null;
+        }
+    }
+
+    if (typeof this.image === 'string') {
+        try {
+            return JSON.parse(this.image);
+        } catch (err) {
+            console.warn('Failed to parse image string:', err.message);
+            return null;
+        }
+    }
+
+    return this.image;
 };
 
 Blog.prototype.hasUploadedImage = function() {
-    return !!(this.image && this.image.size && this.image.size > 0);
+    const image = this.getImageObject();
+    return !!(image && image.filename && image.size && image.size > 0);
 };
 
-Blog.prototype.imageUrlFormatted = function() {
-    if (this.hasUploadedImage) {
-        return `/api/v1/blogs/${this.id}/image`;
+Blog.prototype.getImagePath = function() {
+    const image = this.getImageObject();
+    if (image && image.filename) {
+        return path.join('src/uploads', image.filename);
+    }
+    return null;
+};
+
+Blog.prototype.imageUrlFormatted = function(baseUrl = '/uploads') {
+    const image = this.getImageObject();
+    if (image && image.filename) {
+        return `${baseUrl}/${image.filename}`;
     }
     
     if (this.imageUrl && 
@@ -168,15 +193,21 @@ Blog.prototype.imageUrlFormatted = function() {
     return 'https://cdn.dribbble.com/userupload/41784969/file/still-f9b1bc8254d3e952592927149caef80f.gif?resize=400x0';
 };
 
-Blog.prototype.getImageInfo = function() {
-    // Double check that image exists and has size
-    if (this.image && typeof this.image === 'object' && this.image.size && this.image.size > 0) {
+Blog.prototype.getImageInfo = function(baseUrl = '/uploads') {
+    const image = this.getImageObject();
+
+    if (image && image.filename) {
+        const fullPath = path.join(__dirname, '..', 'uploads', image.filename);
+        const stats = fs.existsSync(fullPath) ? fs.statSync(fullPath) : null;
+        
         return {
             hasImage: true,
-            contentType: this.image.contentType || null,
-            filename: this.image.filename || null,
-            size: this.image.size,
-            url: `/api/v1/blogs/${this.id}/image`,
+            filename: image.filename,
+            relativePath: this.getImagePath(),
+            url: this.imageUrlFormatted(baseUrl),
+            contentType: image.contentType || 'image/jpeg',
+            size: image.size || 0,
+            fileSize: stats ? stats.size : image.size,
             type: 'uploaded'
         };
     }
@@ -194,6 +225,16 @@ Blog.prototype.getImageInfo = function() {
         hasImage: false,
         url: 'https://cdn.dribbble.com/userupload/41784969/file/still-f9b1bc8254d3e952592927149caef80f.gif?resize=400x0'
     };
+};
+
+Blog.prototype.formattedDate = function() {
+    if (!this.createdAt) return '';
+    const date = new Date(this.createdAt);
+    return date.toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric'
+    });
 };
 
 // Class methods
@@ -216,11 +257,10 @@ Blog.findPublished = async function(query = {}, options = {}) {
         order,
         limit,
         offset,
-        attributes: { exclude: ['content', '__v'] }
+        attributes: { exclude: ['content', 'image'] } // Exclude large fields
     });
     
     return { count, rows };
 };
 
 module.exports = Blog;
-

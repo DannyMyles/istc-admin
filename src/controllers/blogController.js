@@ -1,6 +1,8 @@
 const { Op } = require('sequelize');
-const { Blog, User } = require('../models');
+const { Blog } = require('../models');
 const HTTP_STATUS_CODES = require('../utils/statusCodes');
+const fs = require('fs');
+const path = require('path');
 
 const createBlog = async (req, res) => {
   try {
@@ -40,12 +42,12 @@ const createBlog = async (req, res) => {
 
     if (req.file) {
       blogData.image = {
-        data: req.file.buffer,
+        filename: req.file.filename,
+        relativePath: `/uploads/${req.file.filename}`,
         contentType: req.file.mimetype,
-        filename: req.file.originalname,
         size: req.file.size
       };
-      blogData.imageUrl = null; // Important
+      blogData.imageUrl = null; // Clear URL for uploaded image
     } else if (imageUrl) {
       blogData.imageUrl = imageUrl;
     } else {
@@ -80,22 +82,35 @@ const getBlogImage = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const blog = await Blog.findByPk(id, {
-      attributes: ['image']
-    });
+    const blog = await Blog.findByPk(id);
 
-    if (!blog || !blog.image || !blog.image.data) {
-      // Return placeholder if no image
+    if (!blog || !blog.hasUploadedImage()) {
       return res.redirect('https://cdn.dribbble.com/userupload/41784969/file/still-f9b1bc8254d3e952592927149caef80f.gif?resize=400x0');
     }
 
-    // Set content type and send image buffer
-    res.set('Content-Type', blog.image.contentType);
-    res.set('Cache-Control', 'public, max-age=31536000'); // Cache for 1 year
-    res.send(blog.image.data);
+    const image = blog.getImageObject();
+    const imagePath = path.join(__dirname, '..', 'uploads', image.filename);
+
+    if (!fs.existsSync(imagePath)) {
+      console.warn(`Image file not found: ${imagePath}`);
+      return res.redirect('https://cdn.dribbble.com/userupload/41784969/file/still-f9b1bc8254d3e952592927149caef80f.gif?resize=400x0');
+    }
+
+    res.set('Content-Type', image.contentType || 'image/jpeg');
+    res.set('Cache-Control', 'public, max-age=31536000');
+    res.set('Content-Disposition', 'inline');
+
+    const readStream = fs.createReadStream(imagePath);
+    readStream.pipe(res);
+
+    readStream.on('error', (err) => {
+      console.error('Stream error:', err);
+      if (!res.headersSent) {
+        res.redirect('https://cdn.dribbble.com/userupload/41784969/file/still-f9b1bc8254d3e952592927149caef80f.gif?resize=400x0');
+      }
+    });
   } catch (error) {
     console.error('Error fetching blog image:', error);
-    // Redirect to placeholder on error
     res.redirect('https://cdn.dribbble.com/userupload/41784969/file/still-f9b1bc8254d3e952592927149caef80f.gif?resize=400x0');
   }
 };
@@ -105,26 +120,27 @@ const getBlogImageWithInfo = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const blog = await Blog.findByPk(id, {
-      attributes: ['image']
-    });
+    const blog = await Blog.findByPk(id);
 
-    if (!blog || !blog.image || !blog.image.data) {
+    if (!blog || !blog.hasUploadedImage()) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
         error: 'Image not found'
       });
     }
 
-    // Send image info and base64 encoded image
-    const imageBase64 = blog.image.data.toString('base64');
+    const image = blog.getImageObject();
+    const imagePath = path.join(__dirname, '..', 'uploads', image.filename);
+    const stats = fs.existsSync(imagePath) ? fs.statSync(imagePath) : null;
 
     return res.status(HTTP_STATUS_CODES.OK).json({
       image: {
-        contentType: blog.image.contentType,
-        filename: blog.image.filename,
-        size: blog.image.size,
-        base64: `data:${blog.image.contentType};base64,${imageBase64}`,
-        url: `/api/v1/blogs/${id}/image`
+        filename: image.filename,
+        contentType: image.contentType,
+        size: image.size,
+        fileSize: stats ? stats.size : 0,
+        url: `/uploads/${image.filename}`,
+        apiUrl: `/api/v1/blogs/${id}/image`,
+        type: 'uploaded'
       }
     });
   } catch (error) {
@@ -152,9 +168,17 @@ const updateBlog = async (req, res) => {
     // Prepare updates
     const updates = { ...req.body };
 
+    // Delete old image if exists and new file uploaded
+    if (req.file && existingBlog.hasUploadedImage()) {
+      const existingImage = existingBlog.getImageObject();
+      const oldImagePath = path.join(__dirname, '..', 'uploads', existingImage.filename);
+      fs.unlink(oldImagePath, (err) => {
+        if (err) console.warn('Failed to delete old image:', err);
+      });
+    }
+
     // Handle new file upload
     if (req.file) {
-      // File validation is already done by multer, but double-check
       if (req.file.size > 16 * 1024 * 1024) {
         return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
           error: 'Image size exceeds 16MB limit'
@@ -162,30 +186,22 @@ const updateBlog = async (req, res) => {
       }
 
       updates.image = {
-        data: req.file.buffer,
+        filename: req.file.filename,
+        relativePath: `/uploads/${req.file.filename}`,
         contentType: req.file.mimetype,
-        filename: req.file.originalname,
         size: req.file.size
       };
-      // Clear imageUrl if uploading new image
       updates.imageUrl = null;
     }
 
-    // If imageUrl is provided and no file uploaded, clear stored image
+    // If imageUrl provided and no file, clear stored image data
     if (req.body.imageUrl && !req.file) {
-      updates.image = {
-        data: null,
-        contentType: null,
-        filename: null,
-        size: 0
-      };
+      updates.image = null;
+      updates.imageUrl = req.body.imageUrl;
     }
 
     // Find and update blog
-    await Blog.update(
-      { $set: updates },
-      { where: { id }, individualHooks: true }
-    );
+    await Blog.update(updates, { where: { id }, individualHooks: true });
 
     const blog = await Blog.findByPk(id);
 
@@ -287,22 +303,29 @@ const getAllBlogs = async (req, res) => {
       offset
     });
 
-    const formattedBlogs = blogs.map(blog => ({
-      id: blog.id,
-      title: blog.title,
-      slug: blog.slug,
-      excerpt: blog.excerpt,
-      category: blog.category,
-      author: blog.author,
-      date: blog.formattedDate(),
-      readTime: blog.readTime,
-      image: blog.imageUrlFormatted(),
-      imageInfo: blog.getImageInfo(),
-      featured: blog.featured,
-      views: blog.views,
-      likes: blog.likes,
-      tags: blog.tags
-    }));
+    const formattedBlogs = blogs.map(blog => {
+      // Ensure prototype chain for virtual methods
+      if (!blog.imageUrlFormatted) {
+        Object.setPrototypeOf(blog, require('../models/blogModel').prototype);
+      }
+      
+      return {
+        id: blog.id,
+        title: blog.title,
+        slug: blog.slug,
+        excerpt: blog.excerpt,
+        category: blog.category,
+        author: blog.author,
+        date: blog.formattedDate ? blog.formattedDate() : '',
+        readTime: blog.readTime,
+        image: blog.imageUrlFormatted('/uploads'),
+        imageInfo: blog.getImageInfo('/uploads'),
+        featured: blog.featured,
+        views: blog.views,
+        likes: blog.likes,
+        tags: blog.tags
+      };
+    });
 
     const total = Number(count) || 0;
     return res.status(HTTP_STATUS_CODES.OK).json({
@@ -343,12 +366,7 @@ const getBlogBySlug = async (req, res) => {
     // Increment views
     await blog.increment('views');
 
-    // Remove image buffer from response
-    const blogData = blog.toJSON ? blog.toJSON() : blog.get();
-    if (blogData.image && blogData.image.data) {
-      blogData.image.hasBuffer = true;
-      delete blogData.image.data;
-    }
+    // No buffer to remove - filesystem based
 
     return res.status(HTTP_STATUS_CODES.OK).json({
       blog: {
@@ -433,19 +451,24 @@ const getFeaturedBlogs = async (req, res) => {
       limit: 5
     });
 
-    const formattedBlogs = blogs.map(blog => ({
-      id: blog.id,
-      title: blog.title,
-      slug: blog.slug,
-      excerpt: blog.excerpt,
-      category: blog.category,
-      author: blog.author,
-      date: blog.formattedDate(),
-      readTime: blog.readTime,
-      image: blog.imageUrlFormatted(),
-      imageInfo: blog.getImageInfo(),
-      featured: blog.featured
-    }));
+    const formattedBlogs = blogs.map(blog => {
+      if (!blog.imageUrlFormatted) {
+        Object.setPrototypeOf(blog, require('../models/blogModel').prototype);
+      }
+      return {
+        id: blog.id,
+        title: blog.title,
+        slug: blog.slug,
+        excerpt: blog.excerpt,
+        category: blog.category,
+        author: blog.author,
+        date: blog.formattedDate ? blog.formattedDate() : '',
+        readTime: blog.readTime,
+        image: blog.imageUrlFormatted('/uploads'),
+        imageInfo: blog.getImageInfo('/uploads'),
+        featured: blog.featured
+      };
+    });
 
     return res.status(HTTP_STATUS_CODES.OK).json({
       blogs: formattedBlogs
@@ -520,7 +543,7 @@ const getBlogStats = async (req, res) => {
     const [results] = await sequelize.query(`
       SELECT 
         COUNT(*) as totalBlogs,
-        SUM(CASE WHEN image IS NOT NULL AND JSON_EXTRACT(image, '$.size') > 0 THEN 1 ELSE 0 END) as blogsWithImages,
+        SUM(CASE WHEN image IS NOT NULL AND JSON_EXTRACT(image, '$.filename') IS NOT NULL THEN 1 ELSE 0 END) as blogsWithImages,
         SUM(views) as totalViews,
         SUM(CASE WHEN image IS NOT NULL AND JSON_EXTRACT(image, '$.size') > 0 THEN JSON_EXTRACT(image, '$.size') ELSE 0 END) as totalImageSize,
         AVG(CASE WHEN image IS NOT NULL AND JSON_EXTRACT(image, '$.size') > 0 THEN JSON_EXTRACT(image, '$.size') ELSE NULL END) as avgImageSize,
